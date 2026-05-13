@@ -1,0 +1,99 @@
+name: mangopos_administrador
+description: "MangoPOS Admin — Operator Console (Mango platform team)."
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.8.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_web_plugins:
+    sdk: flutter
+
+  cupertino_icons: ^1.0.8
+
+  # State management
+  flutter_riverpod: ^2.6.1
+  riverpod_annotation: ^2.6.1
+
+  # Routing
+  go_router: ^14.6.2
+
+  # Backend
+  supabase_flutter: ^2.8.0
+
+  # UI / fonts / icons
+  google_fonts: ^6.2.1
+  hugeicons: ^0.0.11
+  fl_chart: ^0.69.2
+  data_table_2: ^2.5.16
+
+  # PDF + WhatsApp share
+  pdf: ^3.11.1
+  printing: ^5.13.4
+  url_launcher: ^6.3.1
+
+  # Locale + formatting (es-DO)
+  intl: ^0.19.0
+  timeago: ^3.7.0
+
+  # Logging
+  logger: ^2.5.0
+
+  # Env / config
+  flutter_dotenv: ^5.2.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  riverpod_generator: ^2.6.3
+  build_runner: ^2.4.13
+  custom_lint: ^0.7.0
+  riverpod_lint: ^2.6.3
+  # Generador del icono nativo de cada plataforma (Android / iOS / web).
+  flutter_launcher_icons: ^0.14.4
+
+flutter:
+  uses-material-design: true
+
+  assets:
+    - assets/images/
+    - assets/icons/
+    - assets/favicon/
+    - .env
+
+# ============================================================================
+# Configuración de íconos de launcher por plataforma.
+# Regenerar con:  dart run flutter_launcher_icons
+# ============================================================================
+flutter_launcher_icons:
+  image_path: "assets/images/logo_administrador.png"
+
+  # Android
+  android: true               # genera android/app/src/main/res/mipmap-*/ic_launcher.png
+  min_sdk_android: 21
+  # Adaptive icon (Android 8+): logo sobre fondo blanco para no tener bordes.
+  adaptive_icon_background: "#FFFFFF"
+  adaptive_icon_foreground: "assets/images/logo_administrador.png"
+
+  # iOS
+  ios: true                   # ios/Runner/Assets.xcassets/AppIcon.appiconset
+  remove_alpha_ios: true      # iOS no acepta PNGs con canal alfa
+  background_color_ios: "#FFFFFF"
+
+  # Web + Windows + macOS
+  web:
+    generate: true
+    image_path: "assets/images/logo_administrador.png"
+    background_color: "#FFFFFF"
+    theme_color: "#32AE40"
+  windows:
+    generate: true
+    image_path: "assets/images/logo_administrador.png"
+    icon_size: 256
+  macos:
+    generate: true
+    image_path: "assets/images/logo_administrador.png"

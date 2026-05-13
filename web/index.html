@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="es-DO">
+<head>
+  <base href="$FLUTTER_BASE_HREF">
+
+  <meta charset="UTF-8">
+  <meta content="IE=Edge" http-equiv="X-UA-Compatible">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5, viewport-fit=cover">
+  <meta name="description" content="MangoPOS Admin — consola del operador de la plataforma MangoPOS.">
+  <meta name="theme-color" content="#1F8A4C">
+
+  <!-- iOS / PWA -->
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="MangoPOS Admin">
+  <link rel="apple-touch-icon" href="icons/Icon-192.png">
+
+  <!-- Favicon -->
+  <link rel="icon" type="image/png" sizes="32x32" href="favicon.png"/>
+
+  <title>MangoPOS Admin</title>
+  <link rel="manifest" href="manifest.json">
+
+  <style>
+    html, body { margin: 0; padding: 0; height: 100%; background: #f5f3ee; }
+    #splash {
+      position: fixed; inset: 0;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      background: #f5f3ee; color: #0f1f17;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      transition: opacity 300ms ease;
+      z-index: 9999;
+    }
+    #splash.hidden { opacity: 0; pointer-events: none; }
+    #splash .badge {
+      width: 56px; height: 56px; border-radius: 14px;
+      background: linear-gradient(135deg, #E8742C, #f0944c);
+      box-shadow: 0 8px 24px -8px rgba(232, 116, 44, 0.45);
+      display: flex; align-items: center; justify-content: center;
+      color: white; font-weight: 700; font-size: 24px;
+      margin-bottom: 18px;
+    }
+    #splash .title { font-weight: 600; font-size: 16px; letter-spacing: -0.01em; }
+    #splash .sub { font-size: 11px; text-transform: uppercase; letter-spacing: 0.18em; color: #7a7a78; margin-top: 4px; }
+    #splash .spinner {
+      margin-top: 22px; width: 22px; height: 22px;
+      border: 2px solid rgba(31, 138, 76, 0.18);
+      border-top-color: #1F8A4C; border-radius: 50%;
+      animation: spin 0.9s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <div id="splash">
+    <div class="badge">M</div>
+    <div class="title">MangoPOS</div>
+    <div class="sub">Operator Console</div>
+    <div class="spinner"></div>
+  </div>
+
+  <script>
+    window.addEventListener('flutter-first-frame', function () {
+      var splash = document.getElementById('splash');
+      if (splash) {
+        splash.classList.add('hidden');
+        setTimeout(function () { splash.remove(); }, 350);
+      }
+    });
+  </script>
+
+  <script src="flutter_bootstrap.js" async></script>
+</body>
+</html>
