@@ -36,7 +36,7 @@ class AppShell extends StatelessWidget {
                 child: Column(
                   children: [
                     Topbar(),
-                    Expanded(child: _ContentArea(child: child)),
+                    Expanded(child: child),
                   ],
                 ),
               ),
@@ -61,7 +61,7 @@ class AppShell extends StatelessWidget {
             return Column(
               children: [
                 Topbar(onMenuTap: () => Scaffold.of(context).openDrawer()),
-                Expanded(child: _ContentArea(child: child)),
+                Expanded(child: child),
               ],
             );
           },
@@ -72,8 +72,8 @@ class AppShell extends StatelessWidget {
   }
 }
 
-class _ContentArea extends StatelessWidget {
-  const _ContentArea({required this.child});
+class ContentArea extends StatelessWidget {
+  const ContentArea({super.key, required this.child});
 
   final Widget child;
 
@@ -85,19 +85,16 @@ class _ContentArea extends StatelessWidget {
     final hPad = isDesktop ? 40.0 : (isMobile ? 16.0 : 24.0);
     final vPad = isMobile ? 20.0 : 28.0;
 
-    return SingleChildScrollView(
-      // CRÍTICO: `heightFactor: 1.0` en `Align` hace que el alto sea el del
-      // child (no el del viewport). Sin esto, dentro de un `SingleChildScrollView`
-      // el Align intenta llenar el viewport y le da al child constraints
-      // verticales acotadas, rompiendo el scroll y causando overflow.
-      child: Align(
-        alignment: Alignment.topCenter,
-        heightFactor: 1.0,
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 1600),
-          child: Padding(
-            padding: EdgeInsets.symmetric(horizontal: hPad, vertical: vPad),
-            child: child,
+    return SizedBox.expand(
+      child: SingleChildScrollView(
+        child: Align(
+          alignment: Alignment.topCenter,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 1600),
+            child: Padding(
+              padding: EdgeInsets.symmetric(horizontal: hPad, vertical: vPad),
+              child: child,
+            ),
           ),
         ),
       ),

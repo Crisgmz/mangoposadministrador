@@ -114,14 +114,25 @@ class _MetricsRow extends StatelessWidget {
       data: (m) => LayoutBuilder(
         builder: (context, constraints) {
           final w = constraints.maxWidth;
-          final cols = w >= 1100 ? 4 : 2;
+          final int cols;
+          final double ratio;
+          if (w >= 1100) {
+            cols = 4;
+            ratio = 1.55;
+          } else if (w >= 640) {
+            cols = 2;
+            ratio = 1.6;
+          } else {
+            cols = 1;
+            ratio = 2.8;
+          }
           return GridView.count(
             crossAxisCount: cols,
             shrinkWrap: true,
             physics: const NeverScrollableScrollPhysics(),
             crossAxisSpacing: 14,
             mainAxisSpacing: 14,
-            childAspectRatio: cols == 4 ? 1.55 : 1.6,
+            childAspectRatio: ratio,
             children: [
               MetricCard(
                 label: 'MRR activo',

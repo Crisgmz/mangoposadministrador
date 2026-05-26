@@ -1,0 +1,42 @@
+# Build outputs y caches — se regeneran dentro del contenedor.
+build/
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+
+# Plataformas nativas — no se necesitan para el build web.
+android/
+ios/
+macos/
+linux/
+windows/
+
+# IDE / editor
+.idea/
+.vscode/
+*.iml
+.DS_Store
+
+# Git
+.git/
+.gitignore
+
+# Tests y docs
+test/
+docs/
+*.md
+
+# Secretos locales — NUNCA al image. Coolify inyecta vía build args.
+.env
+.env.local
+.env.*.local
+
+# Coolify / Docker artifacts del repo
+Dockerfile
+.dockerignore
+
+# Misc
+*.log
+coverage/

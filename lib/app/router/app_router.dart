@@ -12,6 +12,7 @@ import '../../presentation/cash/cash_health_page.dart';
 import '../../presentation/cash/cash_session_detail_page.dart';
 import '../../presentation/dashboard/dashboard_page.dart';
 import '../../presentation/incidents/incidents_page.dart';
+import '../../presentation/plans/plans_page.dart';
 import '../../presentation/tables/tables_health_page.dart';
 import '../../presentation/fiscal/fiscal_page.dart';
 import '../../presentation/login/change_password_page.dart';
@@ -101,59 +102,67 @@ final routerProvider = Provider<GoRouter>((ref) {
         routes: [
           GoRoute(
             path: '/',
-            builder: (_, _) => const DashboardPage(),
+            builder: (_, _) => const ContentArea(child: DashboardPage()),
           ),
           GoRoute(
             path: '/negocios',
-            builder: (_, _) => const BusinessesPage(),
+            builder: (_, _) => const ContentArea(child: BusinessesPage()),
             routes: [
               GoRoute(
                 path: ':id',
-                builder: (_, state) => BusinessDetailPage(
-                  businessId: state.pathParameters['id']!,
+                builder: (_, state) => ContentArea(
+                  child: BusinessDetailPage(
+                    businessId: state.pathParameters['id']!,
+                  ),
                 ),
               ),
             ],
           ),
           GoRoute(
             path: '/cajas',
-            builder: (_, _) => const CashHealthPage(),
+            builder: (_, _) => const ContentArea(child: CashHealthPage()),
             routes: [
               GoRoute(
                 path: ':id',
-                builder: (_, state) => CashSessionDetailPage(
-                  sessionId: state.pathParameters['id']!,
+                builder: (_, state) => ContentArea(
+                  child: CashSessionDetailPage(
+                    sessionId: state.pathParameters['id']!,
+                  ),
                 ),
               ),
             ],
           ),
           GoRoute(
             path: '/mesas',
-            builder: (_, _) => const TablesHealthPage(),
+            builder: (_, _) => const ContentArea(child: TablesHealthPage()),
           ),
           GoRoute(
             path: '/facturacion',
-            builder: (_, _) => const BillingPage(),
+            builder: (_, _) => const ContentArea(child: BillingPage()),
+          ),
+          GoRoute(
+            path: '/planes',
+            builder: (_, _) => const ContentArea(child: PlansPage()),
           ),
           GoRoute(
             path: '/fiscal',
-            builder: (_, _) => const FiscalPage(),
+            builder: (_, _) => const ContentArea(child: FiscalPage()),
           ),
           GoRoute(
             path: '/impresion',
-            builder: (_, _) => const PrintingPage(),
+            builder: (_, _) => const ContentArea(child: PrintingPage()),
           ),
           GoRoute(
             path: '/auditoria',
-            builder: (_, _) => const AuditPage(),
+            builder: (_, _) => const ContentArea(child: AuditPage()),
           ),
           GoRoute(
             path: '/alertas',
-            builder: (_, _) => const AlertsPage(),
+            builder: (_, _) => const ContentArea(child: AlertsPage()),
           ),
           GoRoute(
             path: '/incidentes',
-            builder: (_, _) => const IncidentsPage(),
+            builder: (_, _) => const ContentArea(child: IncidentsPage()),
           ),
         ],
       ),

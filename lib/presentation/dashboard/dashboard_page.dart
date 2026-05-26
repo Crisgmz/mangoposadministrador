@@ -356,9 +356,22 @@ class _MetricsGrid extends StatelessWidget {
     return LayoutBuilder(
       builder: (context, constraints) {
         final w = constraints.maxWidth;
-        final wideDesktop = w >= 1100;
-        // Primary: 4 en desktop, 2×2 en lo demás. Secondary: igual layout.
-        final cols = wideDesktop ? 4 : 2;
+        final int cols;
+        final double primaryRatio;
+        final double secondaryRatio;
+        if (w >= 1100) {
+          cols = 4;
+          primaryRatio = 1.45;
+          secondaryRatio = 2.0;
+        } else if (w >= 640) {
+          cols = 2;
+          primaryRatio = 1.25;
+          secondaryRatio = 1.85;
+        } else {
+          cols = 1;
+          primaryRatio = 2.6;
+          secondaryRatio = 3.6;
+        }
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -368,9 +381,7 @@ class _MetricsGrid extends StatelessWidget {
               physics: const NeverScrollableScrollPhysics(),
               crossAxisSpacing: 14,
               mainAxisSpacing: 14,
-              // Primary cards llevan más contenido (progress + featured); ratio
-              // más cuadrado para que no desborde en mobile.
-              childAspectRatio: cols == 4 ? 1.45 : 1.25,
+              childAspectRatio: primaryRatio,
               children: primaryCards,
             ),
             const SizedBox(height: 14),
@@ -380,8 +391,7 @@ class _MetricsGrid extends StatelessWidget {
               physics: const NeverScrollableScrollPhysics(),
               crossAxisSpacing: 12,
               mainAxisSpacing: 12,
-              // Compact cards son más bajas/anchas.
-              childAspectRatio: cols == 4 ? 2.0 : 1.85,
+              childAspectRatio: secondaryRatio,
               children: secondaryCards,
             ),
           ],

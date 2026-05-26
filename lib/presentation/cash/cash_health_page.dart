@@ -100,14 +100,26 @@ class _Kpis extends StatelessWidget {
 
     return LayoutBuilder(
       builder: (context, c) {
-        final cols = c.maxWidth >= 900 ? 4 : 2;
+        final double maxW = c.maxWidth;
+        final int cols;
+        final double ratio;
+        if (maxW >= 900) {
+          cols = 4;
+          ratio = 2.6;
+        } else if (maxW >= 550) {
+          cols = 2;
+          ratio = 2.4;
+        } else {
+          cols = 1;
+          ratio = 4.0;
+        }
         return GridView.count(
           crossAxisCount: cols,
           shrinkWrap: true,
           physics: const NeverScrollableScrollPhysics(),
           crossAxisSpacing: 14,
           mainAxisSpacing: 14,
-          childAspectRatio: cols == 4 ? 2.6 : 2.4,
+          childAspectRatio: ratio,
           children: [
             _KpiCard(
               label: 'Cajas abiertas',

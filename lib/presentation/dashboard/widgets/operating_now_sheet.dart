@@ -10,11 +10,40 @@ import '../../shared/business_avatar.dart';
 /// Modal que muestra los negocios con actividad reciente, agrupados por
 /// estado: EN LÍNEA / TARDÍO / RECIENTE. Cada fila navega al detalle.
 ///
-/// Llamar con `showOperatingNowSheet(context, overview)`.
+/// En desktop (≥ 760 px) se renderiza como diálogo centrado para que aparezca
+/// donde el usuario está mirando; en móvil sigue siendo bottom sheet.
 Future<void> showOperatingNowSheet(
   BuildContext context,
   List<BusinessOverview> overview,
 ) {
+  final size = MediaQuery.sizeOf(context);
+  final isDesktop = size.width >= 760;
+
+  if (isDesktop) {
+    return showDialog(
+      context: context,
+      barrierColor: Colors.black.withValues(alpha: 0.35),
+      builder: (dialogCtx) {
+        final s = MediaQuery.sizeOf(dialogCtx);
+        // Ancho cómodo para lista vertical; alto que no se coma la pantalla.
+        final w = s.width < 720 ? s.width - 32 : 560.0;
+        final h = (s.height * 0.78).clamp(420.0, 720.0);
+        return Dialog(
+          backgroundColor: AppColors.card,
+          insetPadding: const EdgeInsets.all(24),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+          ),
+          child: SizedBox(
+            width: w,
+            height: h,
+            child: _OperatingNowSheet(overview: overview),
+          ),
+        );
+      },
+    );
+  }
+
   return showModalBottomSheet(
     context: context,
     isScrollControlled: true,

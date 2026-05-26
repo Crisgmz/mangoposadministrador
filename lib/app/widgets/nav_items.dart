@@ -55,6 +55,13 @@ const List<NavItem> kNavItems = [
     showInBottomNav: false,
   ),
   NavItem(
+    path: '/planes',
+    label: 'Planes y precios',
+    shortLabel: 'Planes',
+    icon: HugeIcons.strokeRoundedTag01,
+    showInBottomNav: false,
+  ),
+  NavItem(
     path: '/fiscal',
     label: 'Fiscal / NCF',
     shortLabel: 'Fiscal',

@@ -5,8 +5,10 @@ import '../../core/network/supabase_client.dart';
 import '../../core/state/environment_filter.dart';
 import '../../domain/models/audit_log_entry.dart';
 import '../../domain/models/business_environment.dart';
+import '../../domain/models/business_extension.dart';
 import '../../domain/models/business_overview.dart';
 import '../../domain/models/business_week_trend.dart';
+import '../../domain/models/customer_note.dart';
 import '../../domain/models/platform_alert.dart';
 import '../../domain/models/print_failure.dart';
 import '../../domain/models/revenue_hour.dart';
@@ -93,6 +95,194 @@ class DashboardRepository {
     await _client.rpc(
       'toggle_business_status',
       params: {'p_business_id': businessId},
+    );
+  }
+
+  /// Desactiva el negocio (status='inactive') con razón obligatoria.
+  Future<void> deactivateBusiness(String businessId, String reason) async {
+    await _client.rpc(
+      'deactivate_business',
+      params: {'p_business_id': businessId, 'p_reason': reason},
+    );
+  }
+
+  /// Reactiva el negocio (status='active'). Razón opcional.
+  Future<void> activateBusiness(String businessId, {String? reason}) async {
+    await _client.rpc(
+      'activate_business',
+      params: {'p_business_id': businessId, 'p_reason': reason},
+    );
+  }
+
+  /// Borra permanentemente el negocio. Requiere confirmación tipada con el
+  /// nombre exacto del negocio y razón. La RPC valida ambos.
+  ///
+  /// [force] activa el bypass de triggers user-defined (`session_replication_role
+  /// = replica`) para vencer protectores tipo "cash_count_blind is immutable
+  /// after signing". Usar solo cuando el negocio tenga sesiones firmadas o
+  /// data fiscal protegida que impide el borrado normal. El audit registra
+  /// que se forzó.
+  Future<void> deleteBusiness({
+    required String businessId,
+    required String confirmation,
+    required String reason,
+    bool force = false,
+  }) async {
+    await _client.rpc(
+      'delete_business',
+      params: {
+        'p_business_id': businessId,
+        'p_confirmation': confirmation,
+        'p_reason': reason,
+        'p_force': force,
+      },
+    );
+  }
+
+  /// Onboarding manual de un nuevo negocio. El owner debe existir como
+  /// usuario en `auth.users` (registro público previo). Devuelve el id del
+  /// negocio creado.
+  Future<String> createBusiness({
+    required String ownerEmail,
+    required String businessName,
+    String? businessType,
+    String? domain,
+    required String environment, // 'production' | 'sandbox'
+    required String planType, // 'trial' | 'free' | 'basic' | 'pro'
+    int trialDays = 30,
+  }) async {
+    final raw = await _client.rpc(
+      'admin_create_business',
+      params: {
+        'p_owner_email': ownerEmail,
+        'p_business_name': businessName,
+        'p_business_type': businessType,
+        'p_domain': domain,
+        'p_environment': environment,
+        'p_plan_type': planType,
+        'p_trial_days': trialDays,
+      },
+    );
+    if (raw is List && raw.isNotEmpty) {
+      final row = raw.first as Map<String, dynamic>;
+      return row['business_id'] as String;
+    }
+    if (raw is Map<String, dynamic>) {
+      return raw['business_id'] as String;
+    }
+    throw StateError('admin_create_business: respuesta inesperada $raw');
+  }
+
+  /// Histórico de prórrogas / créditos del negocio.
+  Future<List<BusinessExtension>> getBusinessExtensions(
+    String businessId,
+  ) async {
+    final raw = await _client.rpc(
+      'get_business_extensions',
+      params: {'p_business_id': businessId},
+    ) as List<dynamic>;
+    return raw
+        .cast<Map<String, dynamic>>()
+        .map(BusinessExtension.fromJson)
+        .toList(growable: false);
+  }
+
+  /// Otorga una prórroga (trial / gracia) o crédito.
+  ///
+  /// - `trial_extension` y `payment_grace`: `days` requerido, `amount` null.
+  /// - `free_credit`: `amount` requerido, `days` null.
+  Future<void> grantExtension({
+    required String businessId,
+    required ExtensionType type,
+    int? days,
+    double? amount,
+    required String reason,
+    String? customerMessage,
+  }) async {
+    await _client.rpc(
+      'grant_extension',
+      params: {
+        'p_business_id': businessId,
+        'p_type': type.raw,
+        'p_days': days,
+        'p_amount': amount,
+        'p_reason': reason,
+        'p_customer_msg': customerMessage,
+      },
+    );
+  }
+
+  /// Revierte una prórroga ya otorgada. Restaura `end_date` si aplica.
+  Future<void> revertExtension({
+    required String extensionId,
+    required String reason,
+  }) async {
+    await _client.rpc(
+      'revert_extension',
+      params: {'p_extension_id': extensionId, 'p_reason': reason},
+    );
+  }
+
+  /// Notas internas (CRM) del negocio. Pinned primero, luego más recientes.
+  Future<List<CustomerNote>> getCustomerNotes(String businessId) async {
+    final raw = await _client.rpc(
+      'get_customer_notes',
+      params: {'p_business_id': businessId},
+    ) as List<dynamic>;
+    return raw
+        .cast<Map<String, dynamic>>()
+        .map(CustomerNote.fromJson)
+        .toList(growable: false);
+  }
+
+  Future<void> createCustomerNote({
+    required String businessId,
+    required NoteCategory category,
+    required String body,
+    bool pinned = false,
+  }) async {
+    await _client.rpc(
+      'create_customer_note',
+      params: {
+        'p_business_id': businessId,
+        'p_category': category.raw,
+        'p_body': body,
+        'p_pinned': pinned,
+      },
+    );
+  }
+
+  /// Solo el autor puede editar. La RPC valida y devuelve error si no.
+  Future<void> updateCustomerNote({
+    required String noteId,
+    required NoteCategory category,
+    required String body,
+    required bool pinned,
+  }) async {
+    await _client.rpc(
+      'update_customer_note',
+      params: {
+        'p_note_id': noteId,
+        'p_category': category.raw,
+        'p_body': body,
+        'p_pinned': pinned,
+      },
+    );
+  }
+
+  /// Cualquier operador puede fijar/desfijar (no requiere ser autor).
+  Future<void> toggleCustomerNotePin(String noteId) async {
+    await _client.rpc(
+      'toggle_customer_note_pin',
+      params: {'p_note_id': noteId},
+    );
+  }
+
+  /// Solo el autor puede borrar.
+  Future<void> deleteCustomerNote(String noteId) async {
+    await _client.rpc(
+      'delete_customer_note',
+      params: {'p_note_id': noteId},
     );
   }
 
@@ -214,4 +404,18 @@ final filteredWeekTrendProvider =
     if (env == null) return rows;
     return rows.where((t) => t.environment == env).toList(growable: false);
   });
+});
+
+/// Histórico de prórrogas / créditos otorgados por el operador.
+final businessExtensionsProvider =
+    FutureProvider.family<List<BusinessExtension>, String>((ref, businessId) {
+  return ref
+      .watch(dashboardRepositoryProvider)
+      .getBusinessExtensions(businessId);
+});
+
+/// Notas internas (CRM) del negocio.
+final customerNotesProvider =
+    FutureProvider.family<List<CustomerNote>, String>((ref, businessId) {
+  return ref.watch(dashboardRepositoryProvider).getCustomerNotes(businessId);
 });

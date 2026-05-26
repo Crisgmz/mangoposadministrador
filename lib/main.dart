@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_web_plugins/url_strategy.dart';
 import 'package:intl/date_symbol_data_local.dart';
@@ -14,8 +15,9 @@ Future<void> main() async {
   // URLs limpias en web (sin `#`).
   usePathUrlStrategy();
 
-  // Locale es-DO para fechas relativas y formatos.
+  // Locale es y es-DO para fechas relativas y formatos.
   await initializeDateFormatting('es', null);
+  await initializeDateFormatting('es_DO', null);
 
   await dotenv.load(fileName: '.env');
   await initSupabase();
@@ -34,6 +36,20 @@ class MangoPosAdminApp extends ConsumerWidget {
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light(),
       routerConfig: router,
+      // Localizaciones es-DO. Sin esto `showDatePicker(locale: Locale('es'))`
+      // y otros widgets Material que necesitan strings traducidos lanzan
+      // "No MaterialLocalizations found".
+      localizationsDelegates: const [
+        GlobalMaterialLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+      ],
+      supportedLocales: const [
+        Locale('es', 'DO'),
+        Locale('es'),
+        Locale('en'),
+      ],
+      locale: const Locale('es', 'DO'),
     );
   }
 }

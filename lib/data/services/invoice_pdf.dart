@@ -28,7 +28,6 @@ class _Brand {
   static final mutedFg = PdfColor.fromInt(0xFF566159);
   static final border = PdfColor.fromInt(0xFFE5E7EB);
   static final destructive = PdfColor.fromInt(0xFFDC2626);
-  static final warning = PdfColor.fromInt(0xFFF59E0B);
 }
 
 // Formato consistente con la app: "RD$ 13,000.00" (símbolo al inicio,
@@ -175,8 +174,11 @@ pw.Widget _header(
             inv.invoiceNumber,
             style: pw.TextStyle(font: display, fontSize: 22),
           ),
-          pw.SizedBox(height: 8),
-          _statusPill(inv.status, bold: bold),
+          pw.SizedBox(height: 6),
+          // Estado como texto plano coloreado en lugar de pill: las pills
+          // redondeadas con texto vertical pueden renderizarse con halos
+          // (efecto "estrella") en algunos viewers de PDF.
+          _statusText(inv.status, bold: bold),
           pw.SizedBox(height: 14),
           _miniRow('Emisión', _dateLong.format(inv.issueDate),
               bold: bold, medium: medium),
@@ -482,28 +484,20 @@ pw.Widget _box({
   );
 }
 
-pw.Widget _statusPill(InvoiceStatus status, {required pw.Font bold}) {
-  final (bg, fg, label) = switch (status) {
-    InvoiceStatus.paid => (_Brand.primary, PdfColors.white, 'PAGADA'),
-    InvoiceStatus.pending => (_Brand.warning, PdfColors.white, 'PENDIENTE'),
-    InvoiceStatus.expired =>
-      (_Brand.destructive, PdfColors.white, 'VENCIDA'),
-    InvoiceStatus.voided => (_Brand.muted, _Brand.mutedFg, 'ANULADA'),
+pw.Widget _statusText(InvoiceStatus status, {required pw.Font bold}) {
+  final (color, label) = switch (status) {
+    InvoiceStatus.paid => (_Brand.primary, 'PAGADA'),
+    InvoiceStatus.pending => (_Brand.accent, 'PENDIENTE'),
+    InvoiceStatus.expired => (_Brand.destructive, 'VENCIDA'),
+    InvoiceStatus.voided => (_Brand.mutedFg, 'ANULADA'),
   };
-  return pw.Container(
-    padding: const pw.EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-    decoration: pw.BoxDecoration(
-      color: bg,
-      borderRadius: pw.BorderRadius.circular(99),
-    ),
-    child: pw.Text(
-      label,
-      style: pw.TextStyle(
-        font: bold,
-        fontSize: 9,
-        letterSpacing: 1.4,
-        color: fg,
-      ),
+  return pw.Text(
+    label,
+    style: pw.TextStyle(
+      font: bold,
+      fontSize: 10,
+      letterSpacing: 1.6,
+      color: color,
     ),
   );
 }

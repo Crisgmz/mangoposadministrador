@@ -124,14 +124,26 @@ class _KpisGrid extends StatelessWidget {
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, c) {
-        final cols = c.maxWidth >= 1100 ? 4 : 2;
+        final double maxW = c.maxWidth;
+        final int cols;
+        final double ratio;
+        if (maxW >= 1100) {
+          cols = 4;
+          ratio = 2.6;
+        } else if (maxW >= 640) {
+          cols = 2;
+          ratio = 2.4;
+        } else {
+          cols = 1;
+          ratio = 4.0;
+        }
         return GridView.count(
           crossAxisCount: cols,
           shrinkWrap: true,
           physics: const NeverScrollableScrollPhysics(),
           crossAxisSpacing: 14,
           mainAxisSpacing: 14,
-          childAspectRatio: cols == 4 ? 2.6 : 2.4,
+          childAspectRatio: ratio,
           children: [
             _Kpi(
               label: 'Sesiones zombi',
