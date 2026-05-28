@@ -20,6 +20,14 @@ RUN flutter pub get
 # Copia el resto del proyecto.
 COPY . .
 
+# Fail-fast si Coolify olvidó setear los build args. Sin esto el `.env`
+# quedaría con valores vacíos y la app fallaría en runtime con un error
+# poco descriptivo de "Invalid URL".
+RUN test -n "${SUPABASE_URL}" \
+    || (echo "ERROR: SUPABASE_URL build arg vacío. Configurar en Coolify." >&2 && exit 1)
+RUN test -n "${SUPABASE_ANON_KEY}" \
+    || (echo "ERROR: SUPABASE_ANON_KEY build arg vacío. Configurar en Coolify." >&2 && exit 1)
+
 # Escribe el .env con los build args. flutter_dotenv lo lee del bundle.
 RUN echo "SUPABASE_URL=${SUPABASE_URL}"           > .env \
  && echo "SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}" >> .env
