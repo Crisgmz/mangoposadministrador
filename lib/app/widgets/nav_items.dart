@@ -29,10 +29,24 @@ const List<NavItem> kNavItems = [
     icon: HugeIcons.strokeRoundedDashboardSquare02,
   ),
   NavItem(
+    path: '/infraestructura',
+    label: 'Infraestructura',
+    shortLabel: 'Infra',
+    icon: HugeIcons.strokeRoundedCpu,
+    showInBottomNav: false,
+  ),
+  NavItem(
     path: '/negocios',
     label: 'Negocios',
     shortLabel: 'Negocios',
     icon: HugeIcons.strokeRoundedBuilding03,
+  ),
+  NavItem(
+    path: '/pendientes',
+    label: 'Cuentas pendientes',
+    shortLabel: 'Pendientes',
+    icon: HugeIcons.strokeRoundedClock04,
+    showInBottomNav: false,
   ),
   NavItem(
     path: '/cajas',
@@ -92,6 +106,13 @@ const List<NavItem> kNavItems = [
     label: 'Incidentes',
     shortLabel: 'Incidentes',
     icon: HugeIcons.strokeRoundedAlertCircle,
+    showInBottomNav: false,
+  ),
+  NavItem(
+    path: '/configuracion',
+    label: 'Configuración',
+    shortLabel: 'Config',
+    icon: HugeIcons.strokeRoundedSettings02,
     showInBottomNav: false,
   ),
 ];

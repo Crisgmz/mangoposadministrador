@@ -6,6 +6,7 @@ import '../../core/state/environment_filter.dart';
 import '../../domain/models/audit_log_entry.dart';
 import '../../domain/models/business_environment.dart';
 import '../../domain/models/business_extension.dart';
+import '../../domain/models/business_member.dart';
 import '../../domain/models/business_overview.dart';
 import '../../domain/models/business_week_trend.dart';
 import '../../domain/models/customer_note.dart';
@@ -286,6 +287,19 @@ class DashboardRepository {
     );
   }
 
+  /// Owner + miembros del negocio con email, nombre, teléfono y fechas
+  /// (último login, alta del usuario). Owner siempre primero.
+  Future<List<BusinessMember>> getBusinessTeam(String businessId) async {
+    final raw = await _client.rpc(
+      'admin_get_business_team',
+      params: {'p_business_id': businessId},
+    ) as List<dynamic>;
+    return raw
+        .cast<Map<String, dynamic>>()
+        .map(BusinessMember.fromJson)
+        .toList(growable: false);
+  }
+
   Future<void> setBusinessEnvironment(
     String businessId,
     BusinessEnvironment env,
@@ -325,13 +339,25 @@ final platformOverviewProvider = FutureProvider<List<BusinessOverview>>((ref) {
   return ref.watch(dashboardRepositoryProvider).overview();
 });
 
-/// Listado **filtrado** por el entorno seleccionado en `environmentFilterProvider`.
+/// Filtro de status para la tabla de negocios. `null` = todos. Valores
+/// posibles: 'active', 'pending', 'inactive'.
+final businessStatusFilterProvider = StateProvider<String?>((_) => null);
+
+/// Listado **filtrado** por el entorno seleccionado en `environmentFilterProvider`
+/// y el status seleccionado en `businessStatusFilterProvider`.
 /// Es el provider que las pantallas deberían consumir.
 final filteredOverviewProvider = Provider<AsyncValue<List<BusinessOverview>>>((ref) {
   final env = ref.watch(environmentFilterProvider);
+  final statusFilter = ref.watch(businessStatusFilterProvider);
   return ref.watch(platformOverviewProvider).whenData((rows) {
-    if (env == null) return rows;
-    return rows.where((b) => b.environment == env).toList(growable: false);
+    Iterable<BusinessOverview> out = rows;
+    if (env != null) {
+      out = out.where((b) => b.environment == env);
+    }
+    if (statusFilter != null) {
+      out = out.where((b) => b.status == statusFilter);
+    }
+    return out.toList(growable: false);
   });
 });
 
@@ -418,4 +444,10 @@ final businessExtensionsProvider =
 final customerNotesProvider =
     FutureProvider.family<List<CustomerNote>, String>((ref, businessId) {
   return ref.watch(dashboardRepositoryProvider).getCustomerNotes(businessId);
+});
+
+/// Owner + miembros del negocio (datos de contacto).
+final businessTeamProvider =
+    FutureProvider.family<List<BusinessMember>, String>((ref, businessId) {
+  return ref.watch(dashboardRepositoryProvider).getBusinessTeam(businessId);
 });

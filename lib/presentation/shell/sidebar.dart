@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../app/theme/app_colors.dart';
 import '../../app/widgets/nav_items.dart';
+import '../../data/repositories/pending_accounts_repository.dart';
 
 /// Sidebar fijo de desktop (≥1024px). Replica `Sidebar.tsx` del prototipo:
 /// fondo verde oscuro, marca arriba, navegación al medio, footer del operador.
@@ -103,17 +105,17 @@ class _Brand extends StatelessWidget {
   }
 }
 
-class _SidebarItem extends StatefulWidget {
+class _SidebarItem extends ConsumerStatefulWidget {
   const _SidebarItem({required this.item, required this.active});
 
   final NavItem item;
   final bool active;
 
   @override
-  State<_SidebarItem> createState() => _SidebarItemState();
+  ConsumerState<_SidebarItem> createState() => _SidebarItemState();
 }
 
-class _SidebarItemState extends State<_SidebarItem> {
+class _SidebarItemState extends ConsumerState<_SidebarItem> {
   bool _hovering = false;
 
   @override
@@ -123,6 +125,14 @@ class _SidebarItemState extends State<_SidebarItem> {
     final fg = widget.active
         ? AppColors.sidebarAccentForeground
         : AppColors.sidebarForeground.withValues(alpha: 0.75);
+
+    // Badge contador solo para el item de cuentas pendientes. Si en el
+    // futuro otros items necesitan badge, agregar un `badgeProvider` opcional
+    // al NavItem y mapear acá.
+    int? badge;
+    if (widget.item.path == '/pendientes') {
+      badge = ref.watch(pendingAccountsCountProvider).valueOrNull;
+    }
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 4),
@@ -151,14 +161,36 @@ class _SidebarItemState extends State<_SidebarItem> {
               children: [
                 Icon(widget.item.icon, color: fg, size: 18),
                 const SizedBox(width: 12),
-                Text(
-                  widget.item.label,
-                  style: TextStyle(
-                    color: fg,
-                    fontSize: 13.5,
-                    fontWeight: FontWeight.w500,
+                Expanded(
+                  child: Text(
+                    widget.item.label,
+                    style: TextStyle(
+                      color: fg,
+                      fontSize: 13.5,
+                      fontWeight: FontWeight.w500,
+                    ),
                   ),
                 ),
+                if (badge != null && badge > 0)
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 7,
+                      vertical: 2,
+                    ),
+                    decoration: BoxDecoration(
+                      color: AppColors.accent,
+                      borderRadius: BorderRadius.circular(99),
+                    ),
+                    child: Text(
+                      badge > 99 ? '99+' : '$badge',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w700,
+                        height: 1.0,
+                      ),
+                    ),
+                  ),
               ],
             ),
           ),

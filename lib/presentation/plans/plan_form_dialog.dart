@@ -14,6 +14,7 @@ class PlanFormResult {
     required this.features,
     required this.displayOrder,
     required this.isActive,
+    required this.taxIncluded,
   });
 
   final String code;
@@ -23,6 +24,7 @@ class PlanFormResult {
   final List<String> features;
   final int displayOrder;
   final bool isActive;
+  final bool taxIncluded;
 }
 
 /// Dialog para crear o editar un plan.
@@ -46,6 +48,7 @@ class _PlanFormDialogState extends State<PlanFormDialog> {
   late TextEditingController _featureInput;
   late List<String> _features;
   late bool _isActive;
+  late bool _taxIncluded;
 
   bool get _isEdit => widget.existing != null;
 
@@ -65,6 +68,7 @@ class _PlanFormDialogState extends State<PlanFormDialog> {
     _featureInput = TextEditingController();
     _features = List<String>.from(e?.features ?? const <String>[]);
     _isActive = e?.isActive ?? true;
+    _taxIncluded = e?.taxIncluded ?? true;
   }
 
   @override
@@ -215,6 +219,26 @@ class _PlanFormDialogState extends State<PlanFormDialog> {
               ),
               const SizedBox(height: 8),
               SwitchListTile(
+                value: _taxIncluded,
+                onChanged: (v) => setState(() => _taxIncluded = v),
+                title: const Text(
+                  'Precio incluye ITBIS',
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                subtitle: const Text(
+                  'Si está activo, el precio mostrado ya incluye 18% ITBIS y la factura no desglosa impuesto. Si está apagado, la factura agrega ITBIS sobre el precio.',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: AppColors.mutedForeground,
+                  ),
+                ),
+                contentPadding: EdgeInsets.zero,
+                dense: true,
+              ),
+              SwitchListTile(
                 value: _isActive,
                 onChanged: (v) => setState(() => _isActive = v),
                 title: const Text(
@@ -257,6 +281,7 @@ class _PlanFormDialogState extends State<PlanFormDialog> {
                       displayOrder:
                           int.tryParse(_displayOrder.text.trim()) ?? 0,
                       isActive: _isActive,
+                      taxIncluded: _taxIncluded,
                     ),
                   )
               : null,

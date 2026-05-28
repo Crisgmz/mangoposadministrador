@@ -186,28 +186,17 @@ class _MobileCard extends StatelessWidget {
                           style: TextStyle(
                             fontSize: 14,
                             fontWeight: FontWeight.w700,
-                            color: b.isActive
-                                ? AppColors.foreground
-                                : AppColors.mutedForeground,
-                            decoration: b.isActive
-                                ? null
-                                : TextDecoration.lineThrough,
+                            color: b.isInactive
+                                ? AppColors.mutedForeground
+                                : AppColors.foreground,
+                            decoration: b.isInactive
+                                ? TextDecoration.lineThrough
+                                : null,
                           ),
                         ),
                       ),
-                      if (!b.isActive)
-                        const Padding(
-                          padding: EdgeInsets.only(left: 6),
-                          child: Text(
-                            'INACTIVO',
-                            style: TextStyle(
-                              fontSize: 9,
-                              fontWeight: FontWeight.w700,
-                              letterSpacing: 1.2,
-                              color: AppColors.destructive,
-                            ),
-                          ),
-                        ),
+                      const SizedBox(width: 6),
+                      _StatusInline(business: b),
                     ],
                   ),
                   const SizedBox(height: 2),
@@ -422,28 +411,17 @@ class _TableRow extends StatelessWidget {
                                 style: TextStyle(
                                   fontSize: 13,
                                   fontWeight: FontWeight.w600,
-                                  color: b.isActive
-                                      ? AppColors.foreground
-                                      : AppColors.mutedForeground,
-                                  decoration: b.isActive
-                                      ? null
-                                      : TextDecoration.lineThrough,
+                                  color: b.isInactive
+                                      ? AppColors.mutedForeground
+                                      : AppColors.foreground,
+                                  decoration: b.isInactive
+                                      ? TextDecoration.lineThrough
+                                      : null,
                                 ),
                               ),
                             ),
-                            if (!b.isActive)
-                              const Padding(
-                                padding: EdgeInsets.only(left: 8),
-                                child: Text(
-                                  'INACTIVO',
-                                  style: TextStyle(
-                                    fontSize: 9,
-                                    fontWeight: FontWeight.w700,
-                                    letterSpacing: 1.2,
-                                    color: AppColors.destructive,
-                                  ),
-                                ),
-                              ),
+                            const SizedBox(width: 8),
+                            _StatusInline(business: b),
                           ],
                         ),
                         const SizedBox(height: 2),
@@ -563,6 +541,40 @@ class _TableRow extends StatelessWidget {
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Badge inline al lado del nombre del negocio. Renderiza:
+///   * `PENDING` (naranja) si `status='pending'`
+///   * `INACTIVO` (rojo) si `status='inactive'`
+///   * Nada si `active` (el caso común, no metemos ruido visual).
+class _StatusInline extends StatelessWidget {
+  const _StatusInline({required this.business});
+
+  final BusinessOverview business;
+
+  @override
+  Widget build(BuildContext context) {
+    if (business.isActive) return const SizedBox.shrink();
+    final (color, label) = business.isPending
+        ? (AppColors.accent, 'PENDING')
+        : (AppColors.destructive, 'INACTIVO');
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          fontSize: 9,
+          fontWeight: FontWeight.w700,
+          letterSpacing: 1.0,
+          color: color,
         ),
       ),
     );

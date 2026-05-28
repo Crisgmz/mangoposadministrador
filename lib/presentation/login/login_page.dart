@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:hugeicons/hugeicons.dart';
 
@@ -32,6 +33,15 @@ class _LoginPageState extends ConsumerState<LoginPage> {
   }
 
   Future<void> _submit() async {
+    // En Flutter Web, Chrome rellena email/password via autofill pero los
+    // `TextEditingController` NO se sincronizan hasta que el input pierde
+    // focus. Si el usuario clickea "Entrar" directo, el primer `validate()`
+    // ve los controllers vacíos y bloquea silencioso. `finishAutofillContext`
+    // confirma el autofill al engine y sincroniza los controllers.
+    TextInput.finishAutofillContext();
+    // Damos un microtask para que el sync se propague antes de validar.
+    await Future<void>.delayed(Duration.zero);
+
     if (!_formKey.currentState!.validate()) return;
     setState(() {
       _loading = true;
@@ -84,9 +94,10 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                   ),
                 ],
               ),
-              child: Form(
-                key: _formKey,
-                child: Column(
+              child: AutofillGroup(
+                child: Form(
+                  key: _formKey,
+                  child: Column(
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
@@ -203,6 +214,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                       ),
                     ),
                   ],
+                ),
                 ),
               ),
             ),

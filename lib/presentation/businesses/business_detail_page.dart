@@ -6,11 +6,14 @@ import 'package:hugeicons/hugeicons.dart';
 import '../../app/theme/app_colors.dart';
 import '../../core/format/formatters.dart';
 import '../../data/repositories/billing_repository.dart';
+import '../../data/repositories/company_settings_repository.dart';
 import '../../data/repositories/dashboard_repository.dart';
 import '../../data/services/invoice_pdf.dart';
+import '../../domain/models/company_settings.dart';
 import '../../domain/models/audit_log_entry.dart';
 import '../../domain/models/business_environment.dart';
 import '../../domain/models/business_extension.dart';
+import '../../domain/models/business_member.dart';
 import '../../domain/models/business_overview.dart';
 import '../../domain/models/business_week_trend.dart';
 import '../../domain/models/customer_note.dart';
@@ -103,6 +106,8 @@ class _Body extends ConsumerWidget {
         _FiscalAndAgent(business: business),
         const SizedBox(height: 28),
         _PrintFailuresSection(asyncFailures: printFailuresAsync),
+        const SizedBox(height: 28),
+        _TeamSection(business: business),
         const SizedBox(height: 28),
         _InvoicesSection(business: business, invoicesAsync: invoicesAsync),
         const SizedBox(height: 28),
@@ -1344,6 +1349,311 @@ class _PrintFailureRow extends StatelessWidget {
 }
 
 // ---------------------------------------------------------------------------
+// Team section (cliente y miembros)
+// ---------------------------------------------------------------------------
+
+class _TeamSection extends ConsumerWidget {
+  const _TeamSection({required this.business});
+
+  final BusinessOverview business;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final teamAsync = ref.watch(businessTeamProvider(business.id));
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const _SectionTitle(
+          'Cliente y equipo',
+          icon: HugeIcons.strokeRoundedUserGroup,
+        ),
+        const SizedBox(height: 12),
+        teamAsync.when(
+          loading: () => const Padding(
+            padding: EdgeInsets.all(20),
+            child: Center(
+              child: SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            ),
+          ),
+          error: (e, _) => _ErrorBox(message: 'Error: $e'),
+          data: (members) {
+            if (members.isEmpty) {
+              return Container(
+                padding: const EdgeInsets.all(28),
+                decoration: BoxDecoration(
+                  color: AppColors.card,
+                  border: Border.all(color: AppColors.border),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                alignment: Alignment.center,
+                child: const Text(
+                  'No hay usuarios asociados a este negocio.',
+                  style: TextStyle(color: AppColors.mutedForeground),
+                ),
+              );
+            }
+            return Container(
+              decoration: BoxDecoration(
+                color: AppColors.card,
+                border: Border.all(color: AppColors.border, width: 0.6),
+                borderRadius: BorderRadius.circular(20),
+                boxShadow: AppColors.shadowCard,
+              ),
+              clipBehavior: Clip.antiAlias,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  for (var i = 0; i < members.length; i++) ...[
+                    _MemberRow(member: members[i]),
+                    if (i < members.length - 1)
+                      const Divider(
+                        height: 1,
+                        thickness: 1,
+                        color: AppColors.border,
+                      ),
+                  ],
+                ],
+              ),
+            );
+          },
+        ),
+      ],
+    );
+  }
+}
+
+class _MemberRow extends StatelessWidget {
+  const _MemberRow({required this.member});
+  final BusinessMember member;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Avatar circular con inicial.
+          Container(
+            width: 38,
+            height: 38,
+            decoration: BoxDecoration(
+              color: member.isOwner
+                  ? AppColors.primary.withValues(alpha: 0.12)
+                  : AppColors.muted,
+              shape: BoxShape.circle,
+            ),
+            alignment: Alignment.center,
+            child: Text(
+              _initial(member.displayName),
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w700,
+                color: member.isOwner
+                    ? AppColors.primary
+                    : AppColors.foreground,
+              ),
+            ),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        member.displayName,
+                        style: const TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.foreground,
+                        ),
+                      ),
+                    ),
+                    if (member.isOwner)
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 3,
+                        ),
+                        decoration: BoxDecoration(
+                          color:
+                              AppColors.primary.withValues(alpha: 0.10),
+                          borderRadius: BorderRadius.circular(99),
+                        ),
+                        child: const Text(
+                          'OWNER',
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: 0.8,
+                            color: AppColors.primary,
+                          ),
+                        ),
+                      )
+                    else
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 3,
+                        ),
+                        decoration: BoxDecoration(
+                          color: AppColors.muted,
+                          borderRadius: BorderRadius.circular(99),
+                        ),
+                        child: Text(
+                          member.role.toUpperCase(),
+                          style: const TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: 0.8,
+                            color: AppColors.mutedForeground,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                _ContactRow(
+                  icon: HugeIcons.strokeRoundedMail01,
+                  value: member.email ?? '—',
+                  highlight: member.email != null && !member.emailVerified
+                      ? 'No verificado'
+                      : null,
+                ),
+                if (member.phone != null && member.phone!.isNotEmpty)
+                  _ContactRow(
+                    icon: HugeIcons.strokeRoundedCall,
+                    value: member.phone!,
+                  ),
+                const SizedBox(height: 4),
+                Wrap(
+                  spacing: 12,
+                  runSpacing: 2,
+                  children: [
+                    if (member.lastSignInAt != null)
+                      _MetaLine(
+                        label: 'Último login',
+                        value: formatRelative(member.lastSignInAt),
+                      ),
+                    if (member.userCreatedAt != null)
+                      _MetaLine(
+                        label: 'Registrado',
+                        value: formatRelative(member.userCreatedAt),
+                      ),
+                    if (member.isOwner && member.endDate != null)
+                      _MetaLine(
+                        label: 'Membresía hasta',
+                        value: formatRelative(member.endDate),
+                      ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _initial(String s) {
+    final t = s.trim();
+    if (t.isEmpty) return '?';
+    return t.substring(0, 1).toUpperCase();
+  }
+}
+
+class _ContactRow extends StatelessWidget {
+  const _ContactRow({
+    required this.icon,
+    required this.value,
+    this.highlight,
+  });
+  final IconData icon;
+  final String value;
+  final String? highlight;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
+        children: [
+          Icon(icon, size: 12, color: AppColors.mutedForeground),
+          const SizedBox(width: 6),
+          Flexible(
+            child: SelectableText(
+              value,
+              style: const TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w500,
+                color: AppColors.foreground,
+                height: 1.3,
+              ),
+            ),
+          ),
+          if (highlight != null) ...[
+            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: AppColors.warning.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: Text(
+                highlight!,
+                style: const TextStyle(
+                  fontSize: 9,
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.warning,
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _MetaLine extends StatelessWidget {
+  const _MetaLine({required this.label, required this.value});
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          '$label: ',
+          style: const TextStyle(
+            fontSize: 11,
+            color: AppColors.mutedForeground,
+          ),
+        ),
+        Text(
+          value,
+          style: const TextStyle(
+            fontSize: 11,
+            fontFamily: 'monospace',
+            color: AppColors.foreground,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Invoices section
 // ---------------------------------------------------------------------------
 
@@ -1448,12 +1758,16 @@ class _InvoicesSection extends ConsumerWidget {
   }
 }
 
-class _InvoiceRow extends StatelessWidget {
+class _InvoiceRow extends ConsumerWidget {
   const _InvoiceRow({required this.invoice});
   final MembershipInvoice invoice;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final company = ref
+        .watch(companySettingsProvider)
+        .valueOrNull
+        ?? CompanySettings.fallback;
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       child: LayoutBuilder(
@@ -1513,9 +1827,9 @@ class _InvoiceRow extends StatelessWidget {
                       ],
                       onSelected: (action) async {
                         if (action == 'pdf') {
-                          await previewInvoicePdf(invoice);
+                          await previewInvoicePdf(invoice, company: company);
                         } else if (action == 'share') {
-                          await shareInvoicePdf(invoice);
+                          await shareInvoicePdf(invoice, company: company);
                         }
                       },
                     ),
@@ -1573,9 +1887,9 @@ class _InvoiceRow extends StatelessWidget {
                 ],
                 onSelected: (action) async {
                   if (action == 'pdf') {
-                    await previewInvoicePdf(invoice);
+                    await previewInvoicePdf(invoice, company: company);
                   } else if (action == 'share') {
-                    await shareInvoicePdf(invoice);
+                    await shareInvoicePdf(invoice, company: company);
                   }
                 },
               ),

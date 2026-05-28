@@ -8,6 +8,7 @@ class Plan {
     required this.features,
     required this.displayOrder,
     required this.isActive,
+    required this.taxIncluded,
     required this.activeSubscribers,
     required this.createdAt,
     required this.updatedAt,
@@ -24,6 +25,8 @@ class Plan {
   final List<String> features;
   final int displayOrder;
   final bool isActive;
+  /// Si true, `priceMonthly` ya incluye ITBIS y la factura no desglosa impuesto.
+  final bool taxIncluded;
   final DateTime? archivedAt;
   final String? archivedReason;
   final int activeSubscribers;
@@ -42,6 +45,7 @@ class Plan {
       features: _toStringList(json['features']),
       displayOrder: _toInt(json['display_order']),
       isActive: (json['is_active'] as bool?) ?? true,
+      taxIncluded: (json['tax_included'] as bool?) ?? true,
       archivedAt: _parseDate(json['archived_at']),
       archivedReason: json['archived_reason'] as String?,
       activeSubscribers: _toInt(json['active_subscribers']),

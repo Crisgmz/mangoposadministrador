@@ -37,6 +37,9 @@ dependencies:
   printing: ^5.13.4
   url_launcher: ^6.3.1
 
+  # File picker (logo upload en /configuracion)
+  file_picker: ^8.1.4
+
   # Locale + formatting (es-DO)
   intl: ^0.20.2
   timeago: ^3.7.0

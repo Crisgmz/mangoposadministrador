@@ -12,7 +12,10 @@ import '../../presentation/cash/cash_health_page.dart';
 import '../../presentation/cash/cash_session_detail_page.dart';
 import '../../presentation/dashboard/dashboard_page.dart';
 import '../../presentation/incidents/incidents_page.dart';
+import '../../presentation/infrastructure/infrastructure_page.dart';
+import '../../presentation/pending/pending_accounts_page.dart';
 import '../../presentation/plans/plans_page.dart';
+import '../../presentation/settings/settings_page.dart';
 import '../../presentation/tables/tables_health_page.dart';
 import '../../presentation/fiscal/fiscal_page.dart';
 import '../../presentation/login/change_password_page.dart';
@@ -163,6 +166,18 @@ final routerProvider = Provider<GoRouter>((ref) {
           GoRoute(
             path: '/incidentes',
             builder: (_, _) => const ContentArea(child: IncidentsPage()),
+          ),
+          GoRoute(
+            path: '/configuracion',
+            builder: (_, _) => const ContentArea(child: SettingsPage()),
+          ),
+          GoRoute(
+            path: '/pendientes',
+            builder: (_, _) => const ContentArea(child: PendingAccountsPage()),
+          ),
+          GoRoute(
+            path: '/infraestructura',
+            builder: (_, _) => const ContentArea(child: InfrastructurePage()),
           ),
         ],
       ),

@@ -19,6 +19,8 @@ class PlansRepository {
   }
 
   /// Crea o actualiza un plan. `code` es la PK y no se modifica una vez creado.
+  /// `taxIncluded=true` (default) significa que `priceMonthly` ya incluye ITBIS;
+  /// la factura no desglosa impuesto. `false` agrega ITBIS sobre el precio.
   Future<void> upsert({
     required String code,
     required String name,
@@ -27,6 +29,7 @@ class PlansRepository {
     required List<String> features,
     required int displayOrder,
     bool isActive = true,
+    bool taxIncluded = true,
   }) async {
     await _client.rpc(
       'admin_upsert_plan',
@@ -38,6 +41,7 @@ class PlansRepository {
         'p_features': features,
         'p_display_order': displayOrder,
         'p_is_active': isActive,
+        'p_tax_included': taxIncluded,
       },
     );
   }

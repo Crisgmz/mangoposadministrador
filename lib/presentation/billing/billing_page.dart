@@ -7,8 +7,11 @@ import 'package:intl/intl.dart';
 import '../../app/theme/app_colors.dart';
 import '../../core/format/formatters.dart';
 import '../../data/repositories/billing_repository.dart';
+import '../../data/repositories/company_settings_repository.dart';
 import '../../data/repositories/dashboard_repository.dart';
 import '../../data/services/invoice_pdf.dart';
+import '../../domain/models/business_overview.dart';
+import '../../domain/models/company_settings.dart';
 import '../../domain/models/membership_invoice.dart';
 import '../dashboard/widgets/metric_card.dart';
 import '../shared/page_header.dart';
@@ -33,10 +36,25 @@ class BillingPage extends ConsumerWidget {
           title: 'Cobros y membresías',
           subtitle:
               'Genera facturas de plan, registra pagos y marca cuentas vencidas.',
-          trailing: FilledButton.icon(
-            onPressed: () => _bulkGenerate(context, ref),
-            icon: const Icon(HugeIcons.strokeRoundedFile02, size: 16),
-            label: const Text('Generar facturas del mes'),
+          trailing: Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              OutlinedButton.icon(
+                onPressed: () => _generateForOne(context, ref),
+                icon: const Icon(HugeIcons.strokeRoundedFile02, size: 16),
+                label: const Text('Factura individual'),
+              ),
+              FilledButton.icon(
+                onPressed: () => _bulkGenerate(context, ref),
+                icon: const Icon(HugeIcons.strokeRoundedDownload01, size: 16),
+                label: const Text('Generar facturas del mes'),
+                style: FilledButton.styleFrom(
+                  backgroundColor: AppColors.primary,
+                  foregroundColor: Colors.white,
+                ),
+              ),
+            ],
           ),
         ),
         const SizedBox(height: 28),
@@ -62,6 +80,43 @@ class BillingPage extends ConsumerWidget {
         ),
       ],
     );
+  }
+
+  Future<void> _generateForOne(BuildContext context, WidgetRef ref) async {
+    final overview = await ref.read(platformOverviewProvider.future);
+    final candidates = overview.where((b) => b.isActive).toList()
+      ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+
+    if (!context.mounted) return;
+    final picked = await showDialog<BusinessOverview>(
+      context: context,
+      builder: (_) => _PickBusinessDialog(businesses: candidates),
+    );
+    if (picked == null || !context.mounted) return;
+
+    try {
+      final inv = await ref.read(billingRepositoryProvider).generate(picked.id);
+      ref.invalidate(billingOverviewProvider);
+      ref.invalidate(billingMetricsProvider);
+      if (!context.mounted) return;
+      final isNew = inv.issueDate
+              .difference(DateTime.now())
+              .inSeconds
+              .abs() <
+          60;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(isNew
+              ? 'Factura ${inv.invoiceNumber} generada para ${picked.name}.'
+              : 'La factura del período ya existía: ${inv.invoiceNumber}.'),
+        ),
+      );
+    } catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error: $e')),
+      );
+    }
   }
 
   Future<void> _bulkGenerate(BuildContext context, WidgetRef ref) async {
@@ -516,11 +571,15 @@ class _ActionMenu extends ConsumerWidget {
           ),
       ],
       onSelected: (action) async {
+        final company = ref
+                .read(companySettingsProvider)
+                .valueOrNull ??
+            CompanySettings.fallback;
         switch (action) {
           case 'pdf':
-            await previewInvoicePdf(invoice);
+            await previewInvoicePdf(invoice, company: company);
           case 'share':
-            await shareInvoicePdf(invoice);
+            await shareInvoicePdf(invoice, company: company);
           case 'pay':
             await _payDialog(context, ref);
           case 'void':
@@ -696,6 +755,179 @@ class _ErrorBox extends StatelessWidget {
         message,
         style: const TextStyle(color: AppColors.destructive, fontSize: 13),
       ),
+    );
+  }
+}
+
+/// Dialog para elegir un negocio activo y generar su factura del período.
+class _PickBusinessDialog extends StatefulWidget {
+  const _PickBusinessDialog({required this.businesses});
+  final List<BusinessOverview> businesses;
+
+  @override
+  State<_PickBusinessDialog> createState() => _PickBusinessDialogState();
+}
+
+class _PickBusinessDialogState extends State<_PickBusinessDialog> {
+  String _query = '';
+  BusinessOverview? _selected;
+
+  @override
+  Widget build(BuildContext context) {
+    final q = _query.trim().toLowerCase();
+    final filtered = q.isEmpty
+        ? widget.businesses
+        : widget.businesses
+            .where((b) =>
+                b.name.toLowerCase().contains(q) ||
+                b.domain.toLowerCase().contains(q))
+            .toList();
+
+    return AlertDialog(
+      title: Row(
+        children: const [
+          Icon(
+            HugeIcons.strokeRoundedFile02,
+            color: AppColors.primary,
+            size: 18,
+          ),
+          SizedBox(width: 8),
+          Text('Generar factura para un negocio'),
+        ],
+      ),
+      content: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 460, maxHeight: 520),
+        child: SizedBox(
+          width: 460,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Text(
+                'Se generará la factura del período en curso. Si ya existe una factura para ese período, se devuelve la existente (idempotente).',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: AppColors.mutedForeground,
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                autofocus: true,
+                decoration: const InputDecoration(
+                  hintText: 'Buscar por nombre o dominio…',
+                  prefixIcon: Icon(HugeIcons.strokeRoundedSearch01, size: 18),
+                  border: OutlineInputBorder(),
+                  isDense: true,
+                ),
+                onChanged: (v) => setState(() => _query = v),
+              ),
+              const SizedBox(height: 12),
+              Flexible(
+                child: filtered.isEmpty
+                    ? const Center(
+                        child: Padding(
+                          padding: EdgeInsets.all(20),
+                          child: Text(
+                            'Sin resultados.',
+                            style: TextStyle(
+                              color: AppColors.mutedForeground,
+                              fontSize: 13,
+                            ),
+                          ),
+                        ),
+                      )
+                    : Container(
+                        decoration: BoxDecoration(
+                          border: Border.all(color: AppColors.border),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        clipBehavior: Clip.antiAlias,
+                        child: ListView.separated(
+                          shrinkWrap: true,
+                          itemCount: filtered.length,
+                          separatorBuilder: (_, _) => const Divider(
+                            height: 1,
+                            color: AppColors.border,
+                          ),
+                          itemBuilder: (_, i) {
+                            final b = filtered[i];
+                            final selected = _selected?.id == b.id;
+                            return InkWell(
+                              onTap: () => setState(() => _selected = b),
+                              child: Container(
+                                color: selected
+                                    ? AppColors.primary
+                                        .withValues(alpha: 0.08)
+                                    : null,
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                  vertical: 10,
+                                ),
+                                child: Row(
+                                  children: [
+                                    Icon(
+                                      selected
+                                          ? HugeIcons
+                                              .strokeRoundedCheckmarkCircle02
+                                          : HugeIcons
+                                              .strokeRoundedBuilding03,
+                                      size: 16,
+                                      color: selected
+                                          ? AppColors.primary
+                                          : AppColors.mutedForeground,
+                                    ),
+                                    const SizedBox(width: 10),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            b.name,
+                                            style: TextStyle(
+                                              fontSize: 13,
+                                              fontWeight: selected
+                                                  ? FontWeight.w700
+                                                  : FontWeight.w500,
+                                              color: AppColors.foreground,
+                                            ),
+                                          ),
+                                          Text(
+                                            '${b.plan.label} · ${b.domain}',
+                                            style: const TextStyle(
+                                              fontSize: 11,
+                                              fontFamily: 'monospace',
+                                              color:
+                                                  AppColors.mutedForeground,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancelar'),
+        ),
+        FilledButton(
+          onPressed: _selected == null
+              ? null
+              : () => Navigator.of(context).pop(_selected),
+          child: const Text('Generar'),
+        ),
+      ],
     );
   }
 }

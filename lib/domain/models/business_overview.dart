@@ -187,6 +187,8 @@ class BusinessOverview {
   final DateTime? lastActivityAt;
 
   bool get isActive => status == 'active';
+  bool get isPending => status == 'pending';
+  bool get isInactive => status == 'inactive';
   bool get isOnline => activityStatus == ActivityStatus.online;
   bool get isProduction => environment == BusinessEnvironment.production;
   bool get isSandbox => environment == BusinessEnvironment.sandbox;

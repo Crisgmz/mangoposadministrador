@@ -5,19 +5,8 @@ import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 
+import '../../domain/models/company_settings.dart';
 import '../../domain/models/membership_invoice.dart';
-
-/// Datos fijos del emisor (MangoPOS). Si en el futuro estos cambian, se
-/// pueden mover a `business_settings` o a un row de configuración propio.
-class _Issuer {
-  static const name = 'MangoPOS Servicios SRL';
-  static const address =
-      'Av. Lope de Vega No. 13, Naco · Santo Domingo, RD';
-  static const rnc = '1-31-23456-7';
-  static const phone = '+1 (809) 555-0100';
-  static const email = 'soporte@mangopos.do';
-  static const website = 'mangopos.do';
-}
 
 /// Colores de marca usados en el PDF (espejo de `AppColors`).
 class _Brand {
@@ -39,17 +28,33 @@ String _money(num n) => 'RD\$ ${_amount.format(n)}';
 final _dateLong = DateFormat("d 'de' MMMM, yyyy", 'es');
 final _dateShort = DateFormat('dd/MM/yyyy', 'es');
 
-/// Genera los bytes de un PDF con la factura de membresía dada.
-Future<Uint8List> buildInvoicePdf(MembershipInvoice invoice) async {
+/// Genera los bytes de un PDF con la factura de membresía dada. Si no se
+/// provee `company`, usa `CompanySettings.fallback` (los valores que estaban
+/// hardcoded antes de `/configuracion`).
+Future<Uint8List> buildInvoicePdf(
+  MembershipInvoice invoice, {
+  CompanySettings company = CompanySettings.fallback,
+}) async {
   final regular = await PdfGoogleFonts.dMSansRegular();
   final bold = await PdfGoogleFonts.dMSansBold();
   final medium = await PdfGoogleFonts.dMSansMedium();
   final display = await PdfGoogleFonts.spaceGroteskBold();
   final mono = await PdfGoogleFonts.jetBrainsMonoMedium();
 
+  // Intentar descargar el logo si está configurado. Si falla (URL muerta,
+  // sin red, formato no soportado), seguimos sin logo — el PDF se genera igual.
+  pw.ImageProvider? logo;
+  if (company.logoUrl != null && company.logoUrl!.isNotEmpty) {
+    try {
+      logo = await networkImage(company.logoUrl!);
+    } catch (_) {
+      logo = null;
+    }
+  }
+
   final doc = pw.Document(
     title: 'Factura ${invoice.invoiceNumber}',
-    author: _Issuer.name,
+    author: company.legalName,
     creator: 'MangoPOS Operator Console',
     theme: pw.ThemeData.withFont(
       base: regular,
@@ -66,15 +71,17 @@ Future<Uint8List> buildInvoicePdf(MembershipInvoice invoice) async {
       build: (context) => pw.Column(
         crossAxisAlignment: pw.CrossAxisAlignment.stretch,
         children: [
-          _header(invoice, display: display, bold: bold, medium: medium),
+          _header(invoice, company, logo: logo,
+              display: display, bold: bold, medium: medium),
           pw.SizedBox(height: 24),
           _customerAndPeriod(invoice, bold: bold, medium: medium, mono: mono),
           pw.SizedBox(height: 24),
           _amountTable(invoice, bold: bold, medium: medium, display: display),
           pw.SizedBox(height: 18),
-          _paymentBlock(invoice, bold: bold, medium: medium, mono: mono),
+          _paymentBlock(invoice, company,
+              bold: bold, medium: medium, mono: mono),
           pw.Spacer(),
-          _footer(bold: bold, medium: medium, mono: mono),
+          _footer(company, bold: bold, medium: medium, mono: mono),
         ],
       ),
     ),
@@ -84,16 +91,22 @@ Future<Uint8List> buildInvoicePdf(MembershipInvoice invoice) async {
 }
 
 /// Lanza el preview/impresión nativo del PDF generado.
-Future<void> previewInvoicePdf(MembershipInvoice invoice) async {
+Future<void> previewInvoicePdf(
+  MembershipInvoice invoice, {
+  CompanySettings company = CompanySettings.fallback,
+}) async {
   await Printing.layoutPdf(
     name: 'Factura_${invoice.invoiceNumber}',
-    onLayout: (_) => buildInvoicePdf(invoice),
+    onLayout: (_) => buildInvoicePdf(invoice, company: company),
   );
 }
 
 /// Comparte el PDF (sheet del SO con WhatsApp, mail, drive, etc).
-Future<void> shareInvoicePdf(MembershipInvoice invoice) async {
-  final bytes = await buildInvoicePdf(invoice);
+Future<void> shareInvoicePdf(
+  MembershipInvoice invoice, {
+  CompanySettings company = CompanySettings.fallback,
+}) async {
+  final bytes = await buildInvoicePdf(invoice, company: company);
   await Printing.sharePdf(
     bytes: bytes,
     filename: 'Factura_${invoice.invoiceNumber}.pdf',
@@ -105,7 +118,9 @@ Future<void> shareInvoicePdf(MembershipInvoice invoice) async {
 // ---------------------------------------------------------------------------
 
 pw.Widget _header(
-  MembershipInvoice inv, {
+  MembershipInvoice inv,
+  CompanySettings company, {
+  pw.ImageProvider? logo,
   required pw.Font display,
   required pw.Font bold,
   required pw.Font medium,
@@ -117,44 +132,57 @@ pw.Widget _header(
       pw.Column(
         crossAxisAlignment: pw.CrossAxisAlignment.start,
         children: [
-          pw.Container(
-            padding: const pw.EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-            decoration: pw.BoxDecoration(
-              color: _Brand.primary,
-              borderRadius: pw.BorderRadius.circular(8),
-            ),
-            child: pw.Text(
-              'MangoPOS',
-              style: pw.TextStyle(
-                font: display,
-                color: PdfColors.white,
-                fontSize: 18,
-                letterSpacing: -0.5,
+          if (logo != null)
+            pw.Container(
+              constraints: const pw.BoxConstraints(
+                maxHeight: 56,
+                maxWidth: 180,
+              ),
+              child: pw.Image(logo, fit: pw.BoxFit.contain),
+            )
+          else
+            pw.Container(
+              padding:
+                  const pw.EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: pw.BoxDecoration(
+                color: _Brand.primary,
+                borderRadius: pw.BorderRadius.circular(8),
+              ),
+              child: pw.Text(
+                'MangoPOS',
+                style: pw.TextStyle(
+                  font: display,
+                  color: PdfColors.white,
+                  fontSize: 18,
+                  letterSpacing: -0.5,
+                ),
               ),
             ),
-          ),
           pw.SizedBox(height: 12),
           pw.Text(
-            _Issuer.name,
+            company.legalName,
             style: pw.TextStyle(font: bold, fontSize: 11),
           ),
-          pw.SizedBox(height: 2),
-          pw.Text(
-            'RNC ${_Issuer.rnc}',
-            style: pw.TextStyle(
-              font: medium,
-              fontSize: 9,
-              color: _Brand.mutedFg,
+          if (company.rnc != null && company.rnc!.isNotEmpty) ...[
+            pw.SizedBox(height: 2),
+            pw.Text(
+              'RNC ${company.rnc}',
+              style: pw.TextStyle(
+                font: medium,
+                fontSize: 9,
+                color: _Brand.mutedFg,
+              ),
             ),
-          ),
-          pw.Text(
-            _Issuer.address,
-            style: pw.TextStyle(
-              font: medium,
-              fontSize: 9,
-              color: _Brand.mutedFg,
+          ],
+          if (company.fullAddress != null)
+            pw.Text(
+              company.fullAddress!,
+              style: pw.TextStyle(
+                font: medium,
+                fontSize: 9,
+                color: _Brand.mutedFg,
+              ),
             ),
-          ),
         ],
       ),
       pw.Column(
@@ -327,16 +355,33 @@ pw.Widget _amountTable(
         ),
         row('Membresía MangoPOS — Plan ${inv.planType.toUpperCase()}',
             _money(inv.amount)),
-        pw.Divider(color: _Brand.border, height: 1),
-        row('ITBIS (18%)', _money(inv.itbis)),
+        // Solo desglosamos ITBIS si la factura efectivamente lo separa.
+        // Para planes con tax_included=true, itbis=0 y no se muestra la línea.
+        if (inv.itbis > 0) ...[
+          pw.Divider(color: _Brand.border, height: 1),
+          row('ITBIS (18%)', _money(inv.itbis)),
+        ],
         row('TOTAL A PAGAR', _money(inv.total), isTotal: true),
+        if (inv.itbis == 0)
+          pw.Padding(
+            padding: const pw.EdgeInsets.fromLTRB(14, 0, 14, 8),
+            child: pw.Text(
+              'Precio incluye ITBIS.',
+              style: pw.TextStyle(
+                font: medium,
+                fontSize: 9,
+                color: _Brand.mutedFg,
+              ),
+            ),
+          ),
       ],
     ),
   );
 }
 
 pw.Widget _paymentBlock(
-  MembershipInvoice inv, {
+  MembershipInvoice inv,
+  CompanySettings company, {
   required pw.Font bold,
   required pw.Font medium,
   required pw.Font mono,
@@ -393,8 +438,8 @@ pw.Widget _paymentBlock(
       ),
       pw.SizedBox(height: 6),
       pw.Text(
-        'Métodos aceptados: transferencia bancaria, efectivo o tarjeta.\n'
-        'Confirmar pago vía WhatsApp o email a ${_Issuer.email}.',
+        company.paymentInstructions ??
+            CompanySettings.fallback.paymentInstructions!,
         style:
             pw.TextStyle(font: medium, fontSize: 10, color: _Brand.mutedFg),
       ),
@@ -402,7 +447,8 @@ pw.Widget _paymentBlock(
   );
 }
 
-pw.Widget _footer({
+pw.Widget _footer(
+  CompanySettings company, {
   required pw.Font bold,
   required pw.Font medium,
   required pw.Font mono,
@@ -418,18 +464,27 @@ pw.Widget _footer({
         pw.Row(
           mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
           children: [
-            pw.Text(
-              _Issuer.website,
-              style: pw.TextStyle(font: bold, fontSize: 10),
-            ),
-            pw.Text(
-              _Issuer.email,
-              style: pw.TextStyle(font: medium, fontSize: 9),
-            ),
-            pw.Text(
-              _Issuer.phone,
-              style: pw.TextStyle(font: mono, fontSize: 9),
-            ),
+            if (company.website != null && company.website!.isNotEmpty)
+              pw.Text(
+                company.website!,
+                style: pw.TextStyle(font: bold, fontSize: 10),
+              )
+            else
+              pw.SizedBox.shrink(),
+            if (company.email != null && company.email!.isNotEmpty)
+              pw.Text(
+                company.email!,
+                style: pw.TextStyle(font: medium, fontSize: 9),
+              )
+            else
+              pw.SizedBox.shrink(),
+            if (company.phone != null && company.phone!.isNotEmpty)
+              pw.Text(
+                company.phone!,
+                style: pw.TextStyle(font: mono, fontSize: 9),
+              )
+            else
+              pw.SizedBox.shrink(),
           ],
         ),
         pw.SizedBox(height: 4),
