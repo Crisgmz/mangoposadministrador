@@ -146,7 +146,8 @@ class _PlanCard extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final isArchived = plan.isArchived;
     final muted = isArchived || !plan.isActive;
-    return Container(
+    return RepaintBoundary(
+      child: Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: AppColors.card,
@@ -380,6 +381,7 @@ class _PlanCard extends ConsumerWidget {
               ),
           ],
         ],
+      ),
       ),
     );
   }

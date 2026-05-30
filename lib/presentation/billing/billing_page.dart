@@ -6,6 +6,7 @@ import 'package:intl/intl.dart';
 
 import '../../app/theme/app_colors.dart';
 import '../../core/format/formatters.dart';
+import '../../core/utils/debouncer.dart';
 import '../../data/repositories/billing_repository.dart';
 import '../../data/repositories/company_settings_repository.dart';
 import '../../data/repositories/dashboard_repository.dart';
@@ -771,6 +772,13 @@ class _PickBusinessDialog extends StatefulWidget {
 class _PickBusinessDialogState extends State<_PickBusinessDialog> {
   String _query = '';
   BusinessOverview? _selected;
+  final _searchDebouncer = Debouncer(const Duration(milliseconds: 200));
+
+  @override
+  void dispose() {
+    _searchDebouncer.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -819,7 +827,9 @@ class _PickBusinessDialogState extends State<_PickBusinessDialog> {
                   border: OutlineInputBorder(),
                   isDense: true,
                 ),
-                onChanged: (v) => setState(() => _query = v),
+                onChanged: (v) => _searchDebouncer.run(
+                  () => setState(() => _query = v),
+                ),
               ),
               const SizedBox(height: 12),
               Flexible(

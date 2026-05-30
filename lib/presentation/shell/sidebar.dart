@@ -120,11 +120,14 @@ class _SidebarItemState extends ConsumerState<_SidebarItem> {
 
   @override
   Widget build(BuildContext context) {
-    final activeBg = AppColors.sidebarAccent;
-    final hoverBg = AppColors.sidebarAccent.withValues(alpha: 0.5);
+    // Sidebar ahora tiene fondo verde brand (igual a la card "Negocios
+    // activos"). El item activo usa un overlay blanco translúcido sobre el
+    // fondo verde — patrón "on-primary" de Material. Hover algo más sutil.
+    final activeBg = Colors.white.withValues(alpha: 0.20);
+    final hoverBg = Colors.white.withValues(alpha: 0.08);
     final fg = widget.active
-        ? AppColors.sidebarAccentForeground
-        : AppColors.sidebarForeground.withValues(alpha: 0.75);
+        ? Colors.white
+        : Colors.white.withValues(alpha: 0.80);
 
     // Badge contador solo para el item de cuentas pendientes. Si en el
     // futuro otros items necesitan badge, agregar un `badgeProvider` opcional

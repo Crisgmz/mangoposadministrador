@@ -15,11 +15,15 @@ Future<void> main() async {
   // URLs limpias en web (sin `#`).
   usePathUrlStrategy();
 
-  // Locale es y es-DO para fechas relativas y formatos.
-  await initializeDateFormatting('es', null);
-  await initializeDateFormatting('es_DO', null);
-
-  await dotenv.load(fileName: '.env');
+  // Paralelizar inits que son independientes entre sí. Antes eran 4 awaits
+  // seriales (~300-500ms de cold start); ahora bajan a max(individuales)
+  // gracias a `Future.wait`. `initSupabase` queda fuera del wait porque
+  // depende de `dotenv` (lee SUPABASE_URL/SUPABASE_ANON_KEY).
+  await Future.wait([
+    initializeDateFormatting('es', null),
+    initializeDateFormatting('es_DO', null),
+    dotenv.load(fileName: '.env'),
+  ]);
   await initSupabase();
 
   runApp(const ProviderScope(child: MangoPosAdminApp()));

@@ -65,9 +65,12 @@ class _BottomItem extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Sobre el verde brand del fondo (sidebarBackground = primary), el
+    // accent naranja seguía siendo legible pero ahora el blanco con/sin
+    // alpha contrasta mejor y mantiene la paleta limpia.
     final color = active
-        ? AppColors.accent
-        : AppColors.sidebarForeground.withValues(alpha: 0.7);
+        ? Colors.white
+        : Colors.white.withValues(alpha: 0.65);
     return InkWell(
       onTap: onTap,
       child: Column(
@@ -78,7 +81,7 @@ class _BottomItem extends StatelessWidget {
             size: 22,
             color: color,
             shadows: active
-                ? [Shadow(color: AppColors.accent.withValues(alpha: 0.6), blurRadius: 8)]
+                ? [Shadow(color: Colors.white.withValues(alpha: 0.4), blurRadius: 8)]
                 : null,
           ),
           const SizedBox(height: 4),

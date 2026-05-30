@@ -221,12 +221,16 @@ class _PendingRow extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    return InkWell(
-      onTap: () => _open(context, ref),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-        child: LayoutBuilder(
-          builder: (context, c) {
+    // RepaintBoundary aísla esta fila en su propio layer — al scrollear, el
+    // engine no la re-pinta a menos que cambie su contenido. Crítico cuando
+    // hay 50+ filas para que el scroll mantenga 60fps.
+    return RepaintBoundary(
+      child: InkWell(
+        onTap: () => _open(context, ref),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          child: LayoutBuilder(
+            builder: (context, c) {
             final wide = c.maxWidth >= 760;
             return Row(
               children: [
@@ -337,6 +341,7 @@ class _PendingRow extends ConsumerWidget {
               ],
             );
           },
+        ),
         ),
       ),
     );

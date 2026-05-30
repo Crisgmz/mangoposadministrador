@@ -44,14 +44,16 @@ class AppColors {
   static const input = border;
   static const ring = primary;
 
-  // Sidebar (verde oscuro)
-  static const sidebarBackground = Color(0xFF0F1F17); // 145 35% 9%
-  static const sidebarForeground = Color(0xFFE6E0D2); // 40 25% 88%
+  // Sidebar — verde de marca (el mismo de la card "Negocios activos").
+  // El item activo dentro del sidebar usa un overlay blanco translúcido para
+  // distinguirse sobre el fondo verde brillante (patrón "on-primary").
+  static const sidebarBackground = primary; // #32AE40 — verde brand
+  static const sidebarForeground = Color(0xFFFFFFFF);
   static const sidebarPrimary = accent;
   static const sidebarPrimaryForeground = Color(0xFFFFFFFF);
-  static const sidebarAccent = Color(0xFF18301F); // 145 30% 14%
-  static const sidebarAccentForeground = background;
-  static const sidebarBorder = Color(0xFF233A2C); // 145 25% 18%
+  static const sidebarAccent = Color(0xFF2A8E37); // verde más oscuro (overlay)
+  static const sidebarAccentForeground = Color(0xFFFFFFFF);
+  static const sidebarBorder = Color(0xFF2A8E37); // 145 55% 36%
   static const sidebarRing = primaryGlow;
 
   // Gradients (helpers)

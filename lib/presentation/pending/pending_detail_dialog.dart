@@ -249,33 +249,56 @@ class _PendingDetailDialogState extends State<PendingDetailDialog> {
         ),
       ];
     }
+    // OJO: los `actions` de AlertDialog viven en un OverflowBar (no es Flex),
+    // así que un `Spacer`/`Expanded` directo acá lanza un error de layout y
+    // rompe el dialog (área gris). Para separar "Ver detalle" de las acciones
+    // usamos un Row real envuelto a todo el ancho del dialog.
     return [
-      TextButton(
-        onPressed: () => Navigator.of(context).pop(
-          const PendingDetailResult(action: PendingDetailAction.openBusiness),
-        ),
-        child: const Text('Ver detalle completo'),
-      ),
-      const Spacer(),
-      OutlinedButton.icon(
-        onPressed: () => setState(() => _rejectMode = true),
-        icon: const Icon(HugeIcons.strokeRoundedDelete02, size: 14),
-        label: const Text('Rechazar'),
-        style: OutlinedButton.styleFrom(
-          foregroundColor: AppColors.destructive,
-          side: const BorderSide(color: AppColors.destructive),
-        ),
-      ),
-      const SizedBox(width: 8),
-      FilledButton.icon(
-        onPressed: () => Navigator.of(context).pop(
-          const PendingDetailResult(action: PendingDetailAction.approve),
-        ),
-        icon: const Icon(HugeIcons.strokeRoundedCheckmarkCircle02, size: 14),
-        label: const Text('Aprobar cuenta'),
-        style: FilledButton.styleFrom(
-          backgroundColor: AppColors.success,
-          foregroundColor: Colors.white,
+      SizedBox(
+        width: double.infinity,
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(
+                const PendingDetailResult(
+                  action: PendingDetailAction.openBusiness,
+                ),
+              ),
+              child: const Text('Ver detalle completo'),
+            ),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                OutlinedButton.icon(
+                  onPressed: () => setState(() => _rejectMode = true),
+                  icon: const Icon(HugeIcons.strokeRoundedDelete02, size: 14),
+                  label: const Text('Rechazar'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AppColors.destructive,
+                    side: const BorderSide(color: AppColors.destructive),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                FilledButton.icon(
+                  onPressed: () => Navigator.of(context).pop(
+                    const PendingDetailResult(
+                      action: PendingDetailAction.approve,
+                    ),
+                  ),
+                  icon: const Icon(
+                    HugeIcons.strokeRoundedCheckmarkCircle02,
+                    size: 14,
+                  ),
+                  label: const Text('Aprobar cuenta'),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: AppColors.success,
+                    foregroundColor: Colors.white,
+                  ),
+                ),
+              ],
+            ),
+          ],
         ),
       ),
     ];

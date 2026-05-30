@@ -178,7 +178,8 @@ class _VpsCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
+    return RepaintBoundary(
+      child: Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: AppColors.card,
@@ -376,6 +377,7 @@ class _VpsCard extends StatelessWidget {
             ),
           ),
         ],
+      ),
       ),
     );
   }

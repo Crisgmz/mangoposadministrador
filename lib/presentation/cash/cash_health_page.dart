@@ -5,6 +5,7 @@ import 'package:hugeicons/hugeicons.dart';
 
 import '../../app/theme/app_colors.dart';
 import '../../core/format/formatters.dart';
+import '../../core/utils/debouncer.dart';
 import '../../data/repositories/cash_health_repository.dart';
 import '../../data/repositories/dashboard_repository.dart';
 import '../../domain/models/business_overview.dart';
@@ -416,6 +417,13 @@ class _BusinessPicker extends StatefulWidget {
 
 class _BusinessPickerState extends State<_BusinessPicker> {
   String _q = '';
+  final _searchDebouncer = Debouncer(const Duration(milliseconds: 200));
+
+  @override
+  void dispose() {
+    _searchDebouncer.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -468,35 +476,48 @@ class _BusinessPickerState extends State<_BusinessPicker> {
               hintText: 'Buscar negocio...',
               isDense: true,
             ),
-            onChanged: (v) => setState(() => _q = v),
+            onChanged: (v) => _searchDebouncer.run(
+              () => setState(() => _q = v),
+            ),
           ),
         ),
         const SizedBox(height: 8),
         const Divider(height: 1, thickness: 1, color: AppColors.border),
         Expanded(
-          child: ListView(
+          // ListView.builder virtualiza filas — solo renderiza las visibles.
+          // Con 200+ negocios esto evita que el scroll trabe.
+          child: ListView.builder(
             padding: const EdgeInsets.symmetric(vertical: 4),
-            children: [
-              _PickerRow(
-                label: 'Todos los negocios',
-                subtitle: '${widget.rows.length} negocios',
-                selected: widget.current == null,
-                onTap: () => Navigator.of(context).pop('__null__'),
-              ),
-              const Divider(height: 1, thickness: 1, color: AppColors.border),
-              for (final b in filtered)
-                _PickerRow(
-                  avatar: BusinessAvatar(
-                    businessId: b.id,
-                    businessName: b.name,
-                    size: 34,
-                  ),
-                  label: b.name,
-                  subtitle: '${b.businessType ?? "—"} · ${b.domain}',
-                  selected: widget.current == b.id,
-                  onTap: () => Navigator.of(context).pop(b.id),
+            itemCount: filtered.length + 2, // +1 "Todos" +1 divider
+            itemBuilder: (context, i) {
+              if (i == 0) {
+                return _PickerRow(
+                  label: 'Todos los negocios',
+                  subtitle: '${widget.rows.length} negocios',
+                  selected: widget.current == null,
+                  onTap: () => Navigator.of(context).pop('__null__'),
+                );
+              }
+              if (i == 1) {
+                return const Divider(
+                  height: 1,
+                  thickness: 1,
+                  color: AppColors.border,
+                );
+              }
+              final b = filtered[i - 2];
+              return _PickerRow(
+                avatar: BusinessAvatar(
+                  businessId: b.id,
+                  businessName: b.name,
+                  size: 34,
                 ),
-            ],
+                label: b.name,
+                subtitle: '${b.businessType ?? "—"} · ${b.domain}',
+                selected: widget.current == b.id,
+                onTap: () => Navigator.of(context).pop(b.id),
+              );
+            },
           ),
         ),
       ],
