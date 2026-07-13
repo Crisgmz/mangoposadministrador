@@ -23,6 +23,7 @@ import '../dashboard/widgets/metric_card.dart';
 import '../dashboard/widgets/status_badges.dart';
 import 'customer_note_dialog.dart';
 import 'grant_extension_dialog.dart';
+import 'subscription_billing_section.dart';
 
 class BusinessDetailPage extends ConsumerWidget {
   const BusinessDetailPage({required this.businessId, super.key});
@@ -108,6 +109,11 @@ class _Body extends ConsumerWidget {
         _PrintFailuresSection(asyncFailures: printFailuresAsync),
         const SizedBox(height: 28),
         _TeamSection(business: business),
+        const SizedBox(height: 28),
+        SubscriptionBillingSection(
+          businessId: business.id,
+          businessName: business.name,
+        ),
         const SizedBox(height: 28),
         _InvoicesSection(business: business, invoicesAsync: invoicesAsync),
         const SizedBox(height: 28),
