@@ -5,6 +5,8 @@ import '../../core/network/supabase_client.dart';
 import '../../core/state/environment_filter.dart';
 import '../../domain/models/business_environment.dart';
 import '../../domain/models/membership_invoice.dart';
+import '../../domain/models/invoice_payment_result.dart';
+import '../../domain/models/payment_record.dart';
 
 /// Repositorio de facturación de membresías. Llama a las RPCs creadas en
 /// `0004_membership_billing.sql`.
@@ -74,6 +76,32 @@ class BillingRepository {
     return MembershipInvoice.fromJson(raw as Map<String, dynamic>);
   }
 
+  /// Marca varias facturas como pagadas (migración 0044). Si alguna cubre la
+  /// fecha del próximo cobro con tarjeta, el servidor corre ese cobro al fin
+  /// del período pagado para no cobrar dos veces el mismo mes.
+  ///
+  /// Con [dryRun] no escribe nada y devuelve exactamente lo que pasaría: es la
+  /// misma función del servidor, revertida. La UI lo usa como vista previa.
+  Future<InvoicePaymentResult> markInvoicesPaid({
+    required List<String> invoiceIds,
+    required String method,
+    String? reference,
+    DateTime? paidAt,
+    bool dryRun = false,
+  }) async {
+    final raw = await _client.rpc(
+      'admin_mark_invoices_paid',
+      params: {
+        'p_invoice_ids': invoiceIds,
+        'p_method': method,
+        'p_reference': reference,
+        'p_paid_at': paidAt?.toUtc().toIso8601String(),
+        'p_dry_run': dryRun,
+      },
+    );
+    return InvoicePaymentResult.fromJson(Map<String, dynamic>.from(raw as Map));
+  }
+
   Future<MembershipInvoice> voidInvoice(
     String invoiceId, {
     required String reason,
@@ -88,6 +116,20 @@ class BillingRepository {
   Future<int> expireOverdue() async {
     final raw = await _client.rpc('expire_overdue_invoices');
     return raw is int ? raw : int.tryParse(raw.toString()) ?? 0;
+  }
+
+  /// Todos los pagos recibidos: cobros con tarjeta aprobados y facturas
+  /// pagadas a mano (migración 0049).
+  Future<List<PaymentRecord>> payments({int limit = 2000}) async {
+    final raw = await _client.rpc(
+      'admin_list_payments',
+      params: {'p_limit': limit},
+    );
+    if (raw is! List) return const [];
+    return raw
+        .whereType<Map>()
+        .map((r) => PaymentRecord.fromJson(Map<String, dynamic>.from(r)))
+        .toList(growable: false);
   }
 }
 
@@ -118,4 +160,19 @@ final billingMetricsProvider = FutureProvider<BillingMetrics>((ref) {
 final businessInvoicesProvider =
     FutureProvider.family<List<MembershipInvoice>, String>((ref, businessId) {
   return ref.watch(billingRepositoryProvider).forBusiness(businessId);
+});
+
+/// Pagos de todos los negocios (pestaña Pagos de Facturación).
+final paymentsProvider = FutureProvider<List<PaymentRecord>>((ref) {
+  return ref.watch(billingRepositoryProvider).payments();
+});
+
+/// Pagos filtrados por el entorno seleccionado.
+final filteredPaymentsProvider =
+    Provider<AsyncValue<List<PaymentRecord>>>((ref) {
+  final env = ref.watch(environmentFilterProvider);
+  return ref.watch(paymentsProvider).whenData((rows) {
+    if (env == null) return rows;
+    return rows.where((p) => p.environment == env).toList(growable: false);
+  });
 });

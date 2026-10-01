@@ -33,3 +33,12 @@ Future<PickedImage?> pickImageFromWeb({int? maxBytes}) async {
     'Para mobile/desktop, integrar `image_picker` o `file_selector`.',
   );
 }
+
+Future<PickedImage?> pickFileFromWeb({
+  required String accept,
+  int? maxBytes,
+}) async {
+  throw UnsupportedError(
+    'pickFileFromWeb solo está disponible en Flutter Web.',
+  );
+}

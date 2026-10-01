@@ -21,6 +21,13 @@ class SubscriptionBilling {
     this.cancellationReason,
     this.card,
     this.lastCharge,
+    this.priceOverrideCents,
+    this.priceOverrideEndsOn,
+    this.priceOverridePlanCode,
+    this.priceOverrideApplies = false,
+    this.effectivePriceCents,
+    this.priceOverrideReason,
+    this.priceOverrideSetAt,
   });
 
   final String membershipId;
@@ -43,6 +50,40 @@ class SubscriptionBilling {
   final String? cancellationReason;
   final BillingCard? card;
   final BillingLastCharge? lastCharge;
+
+  /// Precio mensual especial acordado con el cliente, en centavos (migración
+  /// 0043). Puede existir y NO aplicar: ver [priceOverrideApplies].
+  final int? priceOverrideCents;
+
+  /// Último día en que aplica. `null` = sin vencimiento.
+  final DateTime? priceOverrideEndsOn;
+
+  /// Plan para el que se acordó. Si difiere de [planCode], el cliente cambió
+  /// de plan y el precio especial ya no corre.
+  final String? priceOverridePlanCode;
+
+  /// Si el precio especial aplica en el PRÓXIMO COBRO (plan coincide y no
+  /// vence antes). Lo resuelve el servidor con la misma función que cobra.
+  final bool priceOverrideApplies;
+
+  /// Lo que se le va a cobrar en el próximo cobro, en centavos. `null` si el
+  /// backend todavía no tiene la migración 0043 aplicada.
+  final int? effectivePriceCents;
+
+  /// Por qué se le dio el precio especial (sale de `noc_audit_log`).
+  final String? priceOverrideReason;
+  final DateTime? priceOverrideSetAt;
+
+  bool get hasPriceOverride => priceOverrideCents != null;
+
+  /// Hay un precio especial cargado que NO se va a aplicar — el cliente cambió
+  /// de plan o vence antes del próximo cobro. Vale la pena mostrarlo: es
+  /// exactamente el caso en que alguien pregunta "¿por qué me cobraron más?".
+  bool get priceOverrideStale => hasPriceOverride && !priceOverrideApplies;
+
+  /// Monto del próximo cobro, cayendo al precio de lista si el backend no
+  /// devuelve el efectivo (0043 sin aplicar).
+  int? get chargePriceCents => effectivePriceCents ?? priceCentsMonthly;
 
   bool get isTrial => billingStatus == 'trial';
   bool get hasVerifiedCard => card?.status == 'verified';
@@ -106,6 +147,17 @@ class SubscriptionBilling {
           ? null
           : BillingLastCharge.fromJson(
               Map<String, dynamic>.from(json['last_charge'] as Map)),
+      priceOverrideCents: json['price_override_cents'] == null
+          ? null
+          : _toInt(json['price_override_cents']),
+      priceOverrideEndsOn: _parseDate(json['price_override_ends_on']),
+      priceOverridePlanCode: json['price_override_plan_code'] as String?,
+      priceOverrideApplies: json['price_override_applies'] == true,
+      effectivePriceCents: json['effective_price_cents'] == null
+          ? null
+          : _toInt(json['effective_price_cents']),
+      priceOverrideReason: json['price_override_reason'] as String?,
+      priceOverrideSetAt: _parseDate(json['price_override_set_at']),
     );
   }
 }

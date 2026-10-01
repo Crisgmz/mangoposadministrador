@@ -2,13 +2,18 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:hugeicons/hugeicons.dart';
+import 'package:intl/intl.dart';
 
 import '../../app/theme/app_colors.dart';
 import '../../core/format/formatters.dart';
+import '../../data/repositories/billing_matrix_repository.dart';
 import '../../data/repositories/billing_repository.dart';
 import '../../data/repositories/company_settings_repository.dart';
 import '../../data/repositories/dashboard_repository.dart';
+import '../../data/repositories/plans_repository.dart';
+import '../../data/repositories/subscription_billing_repository.dart';
 import '../../data/services/invoice_pdf.dart';
+import '../billing/widgets/open_invoice.dart';
 import '../../domain/models/company_settings.dart';
 import '../../domain/models/audit_log_entry.dart';
 import '../../domain/models/business_environment.dart';
@@ -18,12 +23,19 @@ import '../../domain/models/business_overview.dart';
 import '../../domain/models/business_week_trend.dart';
 import '../../domain/models/customer_note.dart';
 import '../../domain/models/membership_invoice.dart';
+import '../../domain/models/plan.dart';
 import '../../domain/models/print_failure.dart';
+import '../../domain/models/subscription_billing.dart';
 import '../dashboard/widgets/metric_card.dart';
 import '../dashboard/widgets/status_badges.dart';
 import 'customer_note_dialog.dart';
 import 'grant_extension_dialog.dart';
+import 'business_access_section.dart';
+import 'ecf_onboarding_section.dart';
+import 'ecf_quota_section.dart';
 import 'subscription_billing_section.dart';
+import 'subscription_charges_section.dart';
+import '../shared/deferred_section.dart';
 
 class BusinessDetailPage extends ConsumerWidget {
   const BusinessDetailPage({required this.businessId, super.key});
@@ -106,25 +118,88 @@ class _Body extends ConsumerWidget {
         const SizedBox(height: 28),
         _FiscalAndAgent(business: business),
         const SizedBox(height: 28),
-        _PrintFailuresSection(asyncFailures: printFailuresAsync),
-        const SizedBox(height: 28),
-        _TeamSection(business: business),
-        const SizedBox(height: 28),
-        SubscriptionBillingSection(
-          businessId: business.id,
-          businessName: business.name,
+        // De acá para abajo queda fuera de pantalla al entrar: se construye
+        // escalonado, una sección por frame, para que la transición no
+        // arranque cargando todas de golpe.
+        DeferredSection(
+          frames: 1,
+          placeholderHeight: 180,
+          child: _PrintFailuresSection(asyncFailures: printFailuresAsync),
         ),
         const SizedBox(height: 28),
-        _InvoicesSection(business: business, invoicesAsync: invoicesAsync),
-        const SizedBox(height: 28),
-        _ExtensionsSection(
-          business: business,
-          extensionsAsync: extensionsAsync,
+        DeferredSection(
+          frames: 2,
+          child: _TeamSection(business: business),
         ),
         const SizedBox(height: 28),
-        _NotesSection(business: business),
+        DeferredSection(
+          frames: 3,
+          placeholderHeight: 320,
+          child: SubscriptionBillingSection(
+            businessId: business.id,
+            businessName: business.name,
+          ),
+        ),
         const SizedBox(height: 28),
-        _AuditSection(asyncLogs: auditAsync),
+        DeferredSection(
+          frames: 3,
+          placeholderHeight: 240,
+          child: SubscriptionChargesSection(
+            businessId: business.id,
+            businessName: business.name,
+          ),
+        ),
+        const SizedBox(height: 28),
+        DeferredSection(
+          frames: 4,
+          child: BusinessAccessSection(
+            businessId: business.id,
+            businessName: business.name,
+          ),
+        ),
+        const SizedBox(height: 28),
+        DeferredSection(
+          frames: 5,
+          placeholderHeight: 300,
+          child: EcfOnboardingSection(businessId: business.id),
+        ),
+        const SizedBox(height: 28),
+        DeferredSection(
+          frames: 5,
+          placeholderHeight: 220,
+          child: EcfQuotaSection(
+            businessId: business.id,
+            businessName: business.name,
+          ),
+        ),
+        const SizedBox(height: 28),
+        DeferredSection(
+          frames: 6,
+          placeholderHeight: 260,
+          child: _InvoicesSection(
+            business: business,
+            invoicesAsync: invoicesAsync,
+          ),
+        ),
+        const SizedBox(height: 28),
+        DeferredSection(
+          frames: 7,
+          child: _ExtensionsSection(
+            business: business,
+            extensionsAsync: extensionsAsync,
+          ),
+        ),
+        const SizedBox(height: 28),
+        DeferredSection(
+          frames: 8,
+          child: _NotesSection(business: business),
+        ),
+        const SizedBox(height: 28),
+        DeferredSection(
+          frames: 9,
+          placeholderHeight: 260,
+          child: _AuditSection(asyncLogs: auditAsync),
+        ),
         const SizedBox(height: 32),
       ],
     );
@@ -275,6 +350,7 @@ class _Header extends ConsumerWidget {
     final result = await showDialog<_MembershipEditResult>(
       context: context,
       builder: (_) => _MembershipDialog(
+        businessId: business.id,
         currentPlan: business.plan,
         currentEndDate: business.planEndDate,
       ),
@@ -283,16 +359,25 @@ class _Header extends ConsumerWidget {
     try {
       await ref.read(dashboardRepositoryProvider).updateBusinessMembership(
             businessId: business.id,
-            planType: result.plan.raw,
+            planType: result.planCode,
             endDate: result.endDate,
             status: result.status,
           );
+      // El plan llega ahora a la membresía ancla (0044): se refresca todo lo
+      // que la lee. Antes solo se invalidaba la lista y la tarjeta de
+      // suscripción de esta misma pantalla seguía con el plan viejo.
       ref.invalidate(platformOverviewProvider);
+      ref.invalidate(subscriptionBillingProvider(business.id));
+      ref.invalidate(billingMatrixProvider);
+      ref.invalidate(billingMetricsProvider);
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            'Membresía de ${business.name} actualizada (${result.plan.label}, ${result.statusLabel}).',
+            result.planChanged
+                ? '${business.name} pasa a ${result.planName}. '
+                    'El precio nuevo se cobra desde el próximo cobro.'
+                : 'Membresía de ${business.name} actualizada.',
           ),
         ),
       );
@@ -1774,134 +1859,138 @@ class _InvoiceRow extends ConsumerWidget {
         .watch(companySettingsProvider)
         .valueOrNull
         ?? CompanySettings.fallback;
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final isCompact = constraints.maxWidth < 500;
-          if (isCompact) {
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(
-                      invoice.invoiceNumber,
-                      style: const TextStyle(
-                        fontSize: 12,
-                        fontFamily: 'monospace',
-                        fontWeight: FontWeight.w600,
-                        color: AppColors.foreground,
-                      ),
-                    ),
-                    _MiniInvoiceStatus(status: invoice.status),
-                  ],
-                ),
-                const SizedBox(height: 6),
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        'Vence ${formatRelative(invoice.dueDate)} · ${invoice.planType.toUpperCase()}',
+    // Tocar la fila abre la factura; el menú sigue para compartir.
+    return InkWell(
+      onTap: () => openInvoicePdf(context, invoice),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final isCompact = constraints.maxWidth < 500;
+            if (isCompact) {
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        invoice.invoiceNumber,
                         style: const TextStyle(
                           fontSize: 12,
-                          color: AppColors.mutedForeground,
+                          fontFamily: 'monospace',
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.foreground,
                         ),
                       ),
-                    ),
-                    Text(
-                      formatRd(invoice.total),
-                      style: const TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w700,
-                        fontFeatures: [FontFeature.tabularFigures()],
-                        color: AppColors.foreground,
+                      _MiniInvoiceStatus(status: invoice.status),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          'Vence ${formatRelative(invoice.dueDate)} · ${invoice.planType.toUpperCase()}',
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: AppColors.mutedForeground,
+                          ),
+                        ),
                       ),
-                    ),
-                    const SizedBox(width: 8),
-                    PopupMenuButton<String>(
-                      icon: const Icon(
-                        HugeIcons.strokeRoundedMoreVertical,
-                        size: 16,
-                        color: AppColors.mutedForeground,
+                      Text(
+                        formatRd(invoice.total),
+                        style: const TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                          fontFeatures: [FontFeature.tabularFigures()],
+                          color: AppColors.foreground,
+                        ),
                       ),
-                      itemBuilder: (_) => const [
-                        PopupMenuItem(value: 'pdf', child: Text('Ver PDF')),
-                        PopupMenuItem(
-                            value: 'share', child: Text('Compartir / WhatsApp')),
-                      ],
-                      onSelected: (action) async {
-                        if (action == 'pdf') {
-                          await previewInvoicePdf(invoice, company: company);
-                        } else if (action == 'share') {
-                          await shareInvoicePdf(invoice, company: company);
-                        }
-                      },
-                    ),
-                  ],
-                ),
-              ],
-            );
-          }
+                      const SizedBox(width: 8),
+                      PopupMenuButton<String>(
+                        icon: const Icon(
+                          HugeIcons.strokeRoundedMoreVertical,
+                          size: 16,
+                          color: AppColors.mutedForeground,
+                        ),
+                        itemBuilder: (_) => const [
+                          PopupMenuItem(value: 'pdf', child: Text('Ver PDF')),
+                          PopupMenuItem(
+                              value: 'share', child: Text('Compartir / WhatsApp')),
+                        ],
+                        onSelected: (action) async {
+                          if (action == 'pdf') {
+                            await previewInvoicePdf(invoice, company: company);
+                          } else if (action == 'share') {
+                            await shareInvoicePdf(invoice, company: company);
+                          }
+                        },
+                      ),
+                    ],
+                  ),
+                ],
+              );
+            }
 
-          return Row(
-            children: [
-              SizedBox(
-                width: 130,
-                child: Text(
-                  invoice.invoiceNumber,
+            return Row(
+              children: [
+                SizedBox(
+                  width: 130,
+                  child: Text(
+                    invoice.invoiceNumber,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontFamily: 'monospace',
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.foreground,
+                    ),
+                  ),
+                ),
+                Expanded(
+                  child: Text(
+                    'Vence ${formatRelative(invoice.dueDate)} · ${invoice.planType.toUpperCase()}',
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: AppColors.mutedForeground,
+                    ),
+                  ),
+                ),
+                Text(
+                  formatRd(invoice.total),
                   style: const TextStyle(
-                    fontSize: 12,
-                    fontFamily: 'monospace',
-                    fontWeight: FontWeight.w600,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                    fontFeatures: [FontFeature.tabularFigures()],
                     color: AppColors.foreground,
                   ),
                 ),
-              ),
-              Expanded(
-                child: Text(
-                  'Vence ${formatRelative(invoice.dueDate)} · ${invoice.planType.toUpperCase()}',
-                  style: const TextStyle(
-                    fontSize: 12,
+                const SizedBox(width: 12),
+                _MiniInvoiceStatus(status: invoice.status),
+                const SizedBox(width: 4),
+                PopupMenuButton<String>(
+                  icon: const Icon(
+                    HugeIcons.strokeRoundedMoreVertical,
+                    size: 16,
                     color: AppColors.mutedForeground,
                   ),
+                  itemBuilder: (_) => const [
+                    PopupMenuItem(value: 'pdf', child: Text('Ver PDF')),
+                    PopupMenuItem(
+                        value: 'share', child: Text('Compartir / WhatsApp')),
+                  ],
+                  onSelected: (action) async {
+                    if (action == 'pdf') {
+                      await previewInvoicePdf(invoice, company: company);
+                    } else if (action == 'share') {
+                      await shareInvoicePdf(invoice, company: company);
+                    }
+                  },
                 ),
-              ),
-              Text(
-                formatRd(invoice.total),
-                style: const TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w700,
-                  fontFeatures: [FontFeature.tabularFigures()],
-                  color: AppColors.foreground,
-                ),
-              ),
-              const SizedBox(width: 12),
-              _MiniInvoiceStatus(status: invoice.status),
-              const SizedBox(width: 4),
-              PopupMenuButton<String>(
-                icon: const Icon(
-                  HugeIcons.strokeRoundedMoreVertical,
-                  size: 16,
-                  color: AppColors.mutedForeground,
-                ),
-                itemBuilder: (_) => const [
-                  PopupMenuItem(value: 'pdf', child: Text('Ver PDF')),
-                  PopupMenuItem(
-                      value: 'share', child: Text('Compartir / WhatsApp')),
-                ],
-                onSelected: (action) async {
-                  if (action == 'pdf') {
-                    await previewInvoicePdf(invoice, company: company);
-                  } else if (action == 'share') {
-                    await shareInvoicePdf(invoice, company: company);
-                  }
-                },
-              ),
-            ],
-          );
-        },
+              ],
+            );
+          },
+        ),
       ),
     );
   }
@@ -2762,58 +2851,61 @@ class _ErrorBox extends StatelessWidget {
 
 class _MembershipEditResult {
   const _MembershipEditResult({
-    required this.plan,
+    required this.planCode,
+    required this.planName,
+    required this.planChanged,
     required this.endDate,
     required this.status,
   });
 
-  /// Plan elegido.
-  final PlanType plan;
+  /// Código del plan elegido (`plan_catalog.code`).
+  final String planCode;
+  final String planName;
+  final bool planChanged;
 
   /// Nueva fecha de corte.
   final DateTime endDate;
 
   /// 'active' | 'expired' | 'canceled' (lo que el RPC espera).
   final String status;
-
-  String get statusLabel {
-    switch (status) {
-      case 'active':
-        return 'Pagada';
-      case 'expired':
-        return 'Vencida';
-      case 'canceled':
-        return 'Cancelada';
-      default:
-        return status;
-    }
-  }
 }
 
-class _MembershipDialog extends StatefulWidget {
+/// Editar plan, fecha de corte y estado de la membresía.
+///
+/// Los planes salen del catálogo real (antes: cuatro fijos en el código) y,
+/// al elegir otro, el diálogo dice qué pasa con el cobro ANTES de guardar:
+/// cuánto va a pagar, desde cuándo, y si pierde un precio especial.
+class _MembershipDialog extends ConsumerStatefulWidget {
   const _MembershipDialog({
+    required this.businessId,
     required this.currentPlan,
     required this.currentEndDate,
   });
 
+  final String businessId;
   final PlanType currentPlan;
   final DateTime? currentEndDate;
 
   @override
-  State<_MembershipDialog> createState() => _MembershipDialogState();
+  ConsumerState<_MembershipDialog> createState() => _MembershipDialogState();
 }
 
-class _MembershipDialogState extends State<_MembershipDialog> {
-  late PlanType _plan;
+class _MembershipDialogState extends ConsumerState<_MembershipDialog> {
+  /// Si el catálogo no cargó, las opciones de siempre.
+  static const _fallbackPlans = <(String, String)>[
+    ('trial', 'Trial'),
+    ('free', 'Free'),
+    ('basic', 'Basic'),
+    ('pro', 'Pro'),
+  ];
+
+  String? _planCode;
   late DateTime _endDate;
   late String _status;
 
   @override
   void initState() {
     super.initState();
-    _plan = widget.currentPlan == PlanType.unknown
-        ? PlanType.basic
-        : widget.currentPlan;
     _endDate = widget.currentEndDate ??
         DateTime.now().add(const Duration(days: 30));
     _status = 'active';
@@ -2846,96 +2938,150 @@ class _MembershipDialogState extends State<_MembershipDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final catalog = (ref.watch(plansListProvider).valueOrNull ?? const <Plan>[])
+        .where((p) => !p.isArchived)
+        .toList()
+      ..sort((a, b) => a.displayOrder.compareTo(b.displayOrder));
+    final billing =
+        ref.watch(subscriptionBillingProvider(widget.businessId)).valueOrNull;
+
+    // El plan actual sale de la ancla (lo que se cobra) si existe: el enum de
+    // la lista solo conoce cuatro planes.
+    final currentCode = billing?.planCode ??
+        (widget.currentPlan == PlanType.unknown
+            ? 'basic'
+            : widget.currentPlan.raw);
+
+    final options = <(String, String)>[
+      if (catalog.isNotEmpty)
+        for (final p in catalog) (p.code, p.name)
+      else
+        ..._fallbackPlans,
+    ];
+    if (!options.any((o) => o.$1 == currentCode)) {
+      // Plan actual archivado: se muestra para no cambiarlo sin querer. El
+      // servidor no deja guardarlo; hay que elegir uno vigente.
+      options.insert(0, (currentCode, '$currentCode (archivado)'));
+    }
+    final selected = _planCode ?? currentCode;
+
+    Plan? planOf(String code) {
+      for (final p in catalog) {
+        if (p.code == code) return p;
+      }
+      return null;
+    }
+
     final dateLabel =
         '${_endDate.day.toString().padLeft(2, "0")}/'
         '${_endDate.month.toString().padLeft(2, "0")}/'
         '${_endDate.year}';
+    String nameOf(String code) =>
+        options.firstWhere((o) => o.$1 == code, orElse: () => (code, code)).$2;
 
     return AlertDialog(
       title: const Text('Editar membresía'),
       content: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 380),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            const _DialogLabel('Plan'),
-            const SizedBox(height: 6),
-            DropdownButtonFormField<PlanType>(
-              initialValue: _plan,
-              isExpanded: true,
-              items: const [
-                DropdownMenuItem(value: PlanType.trial, child: Text('Trial')),
-                DropdownMenuItem(value: PlanType.free, child: Text('Free')),
-                DropdownMenuItem(value: PlanType.basic, child: Text('Basic')),
-                DropdownMenuItem(value: PlanType.pro, child: Text('Pro')),
-              ],
-              onChanged: (v) {
-                if (v != null) setState(() => _plan = v);
-              },
-            ),
-            const SizedBox(height: 16),
-            const _DialogLabel('Fecha de corte'),
-            const SizedBox(height: 6),
-            InkWell(
-              onTap: _pickDate,
-              borderRadius: BorderRadius.circular(10),
-              child: Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 12,
-                ),
-                decoration: BoxDecoration(
-                  color: AppColors.muted,
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Row(
-                  children: [
-                    const Icon(
-                      HugeIcons.strokeRoundedCalendar03,
-                      size: 16,
-                      color: AppColors.mutedForeground,
-                    ),
-                    const SizedBox(width: 8),
-                    Text(
-                      dateLabel,
-                      style: const TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                        color: AppColors.foreground,
+        constraints: const BoxConstraints(maxWidth: 400),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const _DialogLabel('Plan'),
+              const SizedBox(height: 6),
+              DropdownButtonFormField<String>(
+                // Clave por cantidad de opciones: el catálogo llega async y el
+                // campo tiene que reconstruirse cuando aparece.
+                key: ValueKey('plans-${options.length}'),
+                initialValue: selected,
+                isExpanded: true,
+                items: [
+                  for (final (code, name) in options)
+                    DropdownMenuItem(
+                      value: code,
+                      child: Text(
+                        planOf(code) == null
+                            ? name
+                            : '$name · ${formatRd(planOf(code)!.priceMonthly)}/mes',
                       ),
                     ),
-                  ],
-                ),
+                ],
+                onChanged: (v) {
+                  if (v != null) setState(() => _planCode = v);
+                },
               ),
-            ),
-            const SizedBox(height: 16),
-            const _DialogLabel('Estado'),
-            const SizedBox(height: 6),
-            Wrap(
-              spacing: 8,
-              children: [
-                _StatusChip(
-                  label: 'Pagada',
-                  color: AppColors.success,
-                  selected: _status == 'active',
-                  onTap: () => setState(() => _status = 'active'),
-                ),
-                _StatusChip(
-                  label: 'Vencida',
-                  color: AppColors.destructive,
-                  selected: _status == 'expired',
-                  onTap: () => setState(() => _status = 'expired'),
-                ),
-                _StatusChip(
-                  label: 'Cancelada',
-                  color: AppColors.mutedForeground,
-                  selected: _status == 'canceled',
-                  onTap: () => setState(() => _status = 'canceled'),
+              if (selected != currentCode) ...[
+                const SizedBox(height: 10),
+                _PlanChangeImpact(
+                  billing: billing,
+                  newPlanName: nameOf(selected),
+                  newPrice: planOf(selected)?.priceMonthly,
                 ),
               ],
-            ),
-          ],
+              const SizedBox(height: 16),
+              const _DialogLabel('Fecha de corte'),
+              const SizedBox(height: 6),
+              InkWell(
+                onTap: _pickDate,
+                borderRadius: BorderRadius.circular(10),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 12,
+                  ),
+                  decoration: BoxDecoration(
+                    color: AppColors.muted,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(
+                        HugeIcons.strokeRoundedCalendar03,
+                        size: 16,
+                        color: AppColors.mutedForeground,
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        dateLabel,
+                        style: const TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.foreground,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              const _DialogLabel('Estado'),
+              const SizedBox(height: 6),
+              Wrap(
+                spacing: 8,
+                children: [
+                  _StatusChip(
+                    label: 'Pagada',
+                    color: AppColors.success,
+                    selected: _status == 'active',
+                    onTap: () => setState(() => _status = 'active'),
+                  ),
+                  _StatusChip(
+                    label: 'Vencida',
+                    color: AppColors.destructive,
+                    selected: _status == 'expired',
+                    onTap: () => setState(() => _status = 'expired'),
+                  ),
+                  _StatusChip(
+                    label: 'Cancelada',
+                    color: AppColors.mutedForeground,
+                    selected: _status == 'canceled',
+                    onTap: () => setState(() => _status = 'canceled'),
+                  ),
+                ],
+              ),
+            ],
+          ),
         ),
       ),
       actions: [
@@ -2946,7 +3092,9 @@ class _MembershipDialogState extends State<_MembershipDialog> {
         FilledButton(
           onPressed: () => Navigator.of(context).pop(
             _MembershipEditResult(
-              plan: _plan,
+              planCode: selected,
+              planName: nameOf(selected),
+              planChanged: selected != currentCode,
               endDate: _endDate,
               status: _status,
             ),
@@ -2954,6 +3102,61 @@ class _MembershipDialogState extends State<_MembershipDialog> {
           child: const Text('Guardar'),
         ),
       ],
+    );
+  }
+}
+
+/// Qué pasa con el cobro si se guarda el plan nuevo.
+class _PlanChangeImpact extends StatelessWidget {
+  const _PlanChangeImpact({
+    required this.billing,
+    required this.newPlanName,
+    required this.newPrice,
+  });
+
+  final SubscriptionBilling? billing;
+  final String newPlanName;
+
+  /// RD$ mensuales del plan nuevo; `null` si no está en el catálogo cargado.
+  final double? newPrice;
+
+  @override
+  Widget build(BuildContext context) {
+    final b = billing;
+    final current = b?.chargePriceCents;
+    final lines = <String>[
+      'Precio: ${current == null ? '—' : formatRd(current / 100)} → '
+          '${newPrice == null ? '—' : formatRd(newPrice!)}/mes',
+      b?.nextBillingDate == null
+          ? 'Sin cobro inmediato.'
+          : 'Se cobra desde el próximo cobro '
+              '(${DateFormat('d MMM', 'es_DO').format(b!.nextBillingDate!)}). '
+              'Sin cobro inmediato.',
+      if (b != null && b.priceOverrideApplies && b.priceOverrideCents != null)
+        'El precio especial de ${formatRd(b.priceOverrideCents! / 100)} es para '
+            '${b.planName ?? 'el plan actual'}: con $newPlanName deja de aplicar.',
+      if (newPrice == 0) 'Con este plan no se cobra la tarjeta.',
+    ];
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppColors.accent.withValues(alpha: 0.08),
+        border: Border.all(color: AppColors.accent.withValues(alpha: 0.25)),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          for (final l in lines)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 3),
+              child: Text(
+                l,
+                style: const TextStyle(fontSize: 12, height: 1.35),
+              ),
+            ),
+        ],
+      ),
     );
   }
 }

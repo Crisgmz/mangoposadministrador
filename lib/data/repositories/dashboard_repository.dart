@@ -343,6 +343,19 @@ final platformOverviewProvider = FutureProvider<List<BusinessOverview>>((ref) {
 /// posibles: 'active', 'pending', 'inactive'.
 final businessStatusFilterProvider = StateProvider<String?>((_) => null);
 
+/// Texto de búsqueda de negocios (nombre, dominio o tipo).
+///
+/// Es UN solo estado compartido: lo escribe tanto el buscador global del
+/// topbar como el filtro que vive dentro de la tabla. Si fueran dos, el
+/// operador buscaría arriba y vería la tabla sin filtrar — o al revés.
+final businessSearchQueryProvider = StateProvider<String>((_) => '');
+
+/// Segmento de latido para la tabla de negocios. `null` = todos.
+enum BusinessActivitySegment { online, late, down }
+
+final businessActivityFilterProvider =
+    StateProvider<BusinessActivitySegment?>((_) => null);
+
 /// Listado **filtrado** por el entorno seleccionado en `environmentFilterProvider`
 /// y el status seleccionado en `businessStatusFilterProvider`.
 /// Es el provider que las pantallas deberían consumir.
@@ -360,6 +373,84 @@ final filteredOverviewProvider = Provider<AsyncValue<List<BusinessOverview>>>((r
     return out.toList(growable: false);
   });
 });
+
+/// Negocios ordenados por RIESGO OPERATIVO y filtrados por búsqueda/segmento.
+///
+/// El orden importa tanto como el filtro: la lista alfabética escondía al
+/// negocio caído entre veinte que están bien. Acá lo primero que se ve es lo
+/// que está roto.
+final riskSortedOverviewProvider =
+    Provider<AsyncValue<List<BusinessOverview>>>((ref) {
+  final query = ref.watch(businessSearchQueryProvider).trim().toLowerCase();
+  final segment = ref.watch(businessActivityFilterProvider);
+
+  return ref.watch(filteredOverviewProvider).whenData((rows) {
+    Iterable<BusinessOverview> out = rows;
+
+    if (segment != null) {
+      out = out.where((b) => businessSegmentOf(b) == segment);
+    }
+    if (query.isNotEmpty) {
+      out = out.where(
+        (b) =>
+            b.name.toLowerCase().contains(query) ||
+            b.domain.toLowerCase().contains(query) ||
+            (b.businessType ?? '').toLowerCase().contains(query),
+      );
+    }
+
+    final list = out.toList();
+    list.sort((a, b) {
+      final byRisk = _riskRank(a).compareTo(_riskRank(b));
+      if (byRisk != 0) return byRisk;
+      return b.revenueToday.compareTo(a.revenueToday);
+    });
+    return List<BusinessOverview>.unmodifiable(list);
+  });
+});
+
+/// Segmento al que pertenece un negocio según el LATIDO DE SU AGENTE.
+///
+/// El latido es la señal de vida del POS instalado: si se corta, el negocio
+/// puede estar vendiendo sin que la plataforma se entere. Por eso segmenta la
+/// tabla, y no la actividad de uso (que baja de noche en todos por igual).
+BusinessActivitySegment businessSegmentOf(BusinessOverview b) {
+  switch (b.agentStatus) {
+    case AgentStatus.online:
+      return BusinessActivitySegment.online;
+    case AgentStatus.late:
+      return BusinessActivitySegment.late;
+    case AgentStatus.offline:
+    case AgentStatus.none:
+      return BusinessActivitySegment.down;
+  }
+}
+
+/// True si la fila debe pintarse con fondo de riesgo: el agente no está
+/// reportando y el negocio sigue activo.
+bool businessIsAtRisk(BusinessOverview b) =>
+    b.isActive &&
+    (b.agentStatus == AgentStatus.offline || b.agentStatus == AgentStatus.none);
+
+/// Menor = más urgente.
+///
+/// El orden sale de qué tan caro es NO enterarse: primero el agente que se
+/// cayó, después el POS que dejó de reportar con dinero abierto en caja, y
+/// solo entonces los que nunca tuvieron agente (esos son una instalación
+/// pendiente, no una emergencia). Un negocio dado de baja va al fondo: nadie
+/// espera latido de algo apagado a propósito.
+int _riskRank(BusinessOverview b) {
+  if (!b.isActive) return 7;
+  if (b.agentStatus == AgentStatus.offline) return 0;
+  if (b.activityStatus == ActivityStatus.inactive && b.openSessions > 0) {
+    return 1;
+  }
+  if (b.agentStatus == AgentStatus.none) return 2;
+  if (b.agentStatus == AgentStatus.late) return 3;
+  if (b.ncfStatus == NcfStatus.critical) return 4;
+  if (b.printFailures24h >= 10) return 5;
+  return 6;
+}
 
 /// Tendencia de ingresos plataforma últimas 12 horas. Server-side filtra por env.
 final revenueTrend12hProvider = FutureProvider<List<RevenueHour>>((ref) {

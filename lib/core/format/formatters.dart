@@ -19,6 +19,21 @@ String formatRdCompact(num value) => 'RD\$ ${_amountCompact.format(value)}';
 /// Alias histórico — equivalente a `formatRd` (con 2 decimales).
 String formatRdPrecise(num value) => formatRd(value);
 
+/// Versión abreviada para KPIs donde el ancho es de una celda: `RD$ 458.9k`,
+/// `RD$ 1.2M`. Por debajo de mil no abrevia — "RD$ 0.9k" se lee peor que
+/// "RD$ 900".
+String formatRdShort(num value) {
+  final v = value.toDouble();
+  final abs = v.abs();
+  if (abs >= 1000000) {
+    return 'RD\$ ${(v / 1000000).toStringAsFixed(1)}M';
+  }
+  if (abs >= 1000) {
+    return 'RD\$ ${(v / 1000).toStringAsFixed(1)}k';
+  }
+  return formatRdCompact(v);
+}
+
 /// Formatea un entero con separadores de miles (`1820` → `1,820`).
 String formatInt(num value) => _intFmt.format(value);
 

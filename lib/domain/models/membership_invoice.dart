@@ -54,6 +54,9 @@ class MembershipInvoice {
     this.paymentMethod,
     this.paymentReference,
     required this.environment,
+    this.ecfOverageAmount = 0,
+    this.ecfExtra,
+    this.ecfUnitPriceCents,
   });
 
   final String id;
@@ -74,6 +77,11 @@ class MembershipInvoice {
   final String? paymentReference;
   final BusinessEnvironment environment;
 
+  /// Parte de [amount] que son facturas electrónicas extra (migración 0051).
+  final double ecfOverageAmount;
+  final int? ecfExtra;
+  final int? ecfUnitPriceCents;
+
   factory MembershipInvoice.fromJson(Map<String, dynamic> json) {
     return MembershipInvoice(
       id: json['id'] as String,
@@ -93,8 +101,21 @@ class MembershipInvoice {
       paymentMethod: json['payment_method'] as String?,
       paymentReference: json['payment_reference'] as String?,
       environment: BusinessEnvironmentX.fromText(json['environment'] as String?),
+      ecfOverageAmount: json['ecf_overage_amount'] == null
+          ? 0
+          : parseDouble(json['ecf_overage_amount']),
+      ecfExtra: _ecfDetailInt(json['ecf_detail'], 'extra'),
+      ecfUnitPriceCents: _ecfDetailInt(json['ecf_detail'], 'unit_price_cents'),
     );
   }
+}
+
+int? _ecfDetailInt(dynamic detail, String key) {
+  if (detail is! Map) return null;
+  final raw = detail[key];
+  if (raw is int) return raw;
+  if (raw is num) return raw.toInt();
+  return raw == null ? null : int.tryParse(raw.toString());
 }
 
 /// Métricas agregadas devueltas por `get_billing_metrics()`.

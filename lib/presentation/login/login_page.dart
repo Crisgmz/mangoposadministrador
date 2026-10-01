@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:hugeicons/hugeicons.dart';
 
 import '../../app/theme/app_colors.dart';
+import '../../core/auth/auth_state.dart';
 import '../../core/network/supabase_client.dart';
 
 /// Pantalla de login email/password contra Supabase Auth.
@@ -32,15 +33,32 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     super.dispose();
   }
 
+  /// Espera a que el autofill del navegador llegue a los controllers.
+  ///
+  /// En Flutter Web, Chrome rellena email/password en el input oculto y los
+  /// valores viajan al framework por el canal de plataforma — es asíncrono.
+  /// `finishAutofillContext()` lo dispara, pero el `await Duration.zero` que
+  /// había antes no alcanzaba: el primer clic validaba con los controllers
+  /// todavía vacíos, no pasaba nada visible, y recién el SEGUNDO clic
+  /// funcionaba. De ahí el "tengo que darle dos veces".
+  ///
+  /// Se sondea en pasos cortos y se sale apenas hay datos, así que quien
+  /// escribió a mano no espera nada.
+  Future<void> _waitForAutofill() async {
+    bool filled() =>
+        _emailCtl.text.trim().isNotEmpty && _pwdCtl.text.isNotEmpty;
+    if (filled()) return;
+    for (var i = 0; i < 8; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 40));
+      if (!mounted || filled()) return;
+    }
+  }
+
   Future<void> _submit() async {
-    // En Flutter Web, Chrome rellena email/password via autofill pero los
-    // `TextEditingController` NO se sincronizan hasta que el input pierde
-    // focus. Si el usuario clickea "Entrar" directo, el primer `validate()`
-    // ve los controllers vacíos y bloquea silencioso. `finishAutofillContext`
-    // confirma el autofill al engine y sincroniza los controllers.
+    if (_loading) return; // doble clic rápido: un solo intento
     TextInput.finishAutofillContext();
-    // Damos un microtask para que el sync se propague antes de validar.
-    await Future<void>.delayed(Duration.zero);
+    await _waitForAutofill();
+    if (!mounted) return;
 
     if (!_formKey.currentState!.validate()) return;
     setState(() {
@@ -225,13 +243,27 @@ class _LoginPageState extends ConsumerState<LoginPage> {
   }
 }
 
-/// Pantalla mostrada cuando el usuario está autenticado pero NO está
-/// en `platform_operators`. Permite cerrar sesión.
-class ForbiddenPage extends ConsumerWidget {
-  const ForbiddenPage({super.key});
+/// Layout compartido por las dos pantallas de bloqueo. Mismo esqueleto,
+/// distinto mensaje y distintas salidas.
+class _GateScreen extends StatelessWidget {
+  const _GateScreen({
+    required this.icon,
+    required this.iconColor,
+    required this.title,
+    required this.message,
+    required this.actions,
+    this.footnote,
+  });
+
+  final IconData icon;
+  final Color iconColor;
+  final String title;
+  final String message;
+  final List<Widget> actions;
+  final String? footnote;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppColors.background,
       body: Center(
@@ -246,26 +278,37 @@ class ForbiddenPage extends ConsumerWidget {
                   width: 64,
                   height: 64,
                   decoration: BoxDecoration(
-                    color: AppColors.destructive.withValues(alpha: 0.1),
+                    color: iconColor.withValues(alpha: 0.1),
                     borderRadius: BorderRadius.circular(16),
                   ),
-                  child: const Icon(HugeIcons.strokeRoundedShieldBlockchain, color: AppColors.destructive, size: 30),
+                  child: Icon(icon, color: iconColor, size: 30),
                 ),
                 const SizedBox(height: 16),
-                Text('Acceso restringido', style: Theme.of(context).textTheme.headlineSmall),
+                Text(title, style: Theme.of(context).textTheme.headlineSmall),
                 const SizedBox(height: 8),
-                const Text(
-                  'Esta cuenta no está autorizada como operador de plataforma. '
-                  'Si crees que es un error, contacta al equipo de Mango.',
+                Text(
+                  message,
                   textAlign: TextAlign.center,
-                  style: TextStyle(color: AppColors.mutedForeground),
+                  style: const TextStyle(color: AppColors.mutedForeground),
                 ),
+                if (footnote != null) ...[
+                  const SizedBox(height: 10),
+                  Text(
+                    footnote!,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontFamily: 'monospace',
+                      color: AppColors.mutedForeground,
+                    ),
+                  ),
+                ],
                 const SizedBox(height: 24),
-                OutlinedButton(
-                  onPressed: () async {
-                    await ref.read(supabaseProvider).auth.signOut();
-                  },
-                  child: const Text('Cerrar sesión'),
+                Wrap(
+                  spacing: 10,
+                  runSpacing: 10,
+                  alignment: WrapAlignment.center,
+                  children: actions,
                 ),
               ],
             ),
@@ -273,5 +316,90 @@ class ForbiddenPage extends ConsumerWidget {
         ),
       ),
     );
+  }
+}
+
+/// Pantalla mostrada cuando el servidor respondió que el usuario NO está en
+/// `platform_operators`. Es una respuesta definitiva, pero igual ofrece
+/// reintentar: si acaban de agregar la cuenta a la whitelist, el operador no
+/// debería tener que cerrar sesión y volver a entrar para que se note.
+class ForbiddenPage extends ConsumerWidget {
+  const ForbiddenPage({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final email = ref.watch(currentUserEmailProvider);
+    return _GateScreen(
+      icon: HugeIcons.strokeRoundedShieldBlockchain,
+      iconColor: AppColors.destructive,
+      title: 'Acceso restringido',
+      message:
+          'Esta cuenta no está autorizada como operador de plataforma. '
+          'Si crees que es un error, contacta al equipo de Mango.',
+      // Decir CON QUÉ cuenta entró evita el caso más común de este mensaje:
+      // haber iniciado sesión con el correo personal en vez del de operador.
+      footnote: email,
+      actions: [
+        OutlinedButton(
+          onPressed: () => ref.invalidate(isPlatformOperatorProvider),
+          child: const Text('Reintentar'),
+        ),
+        FilledButton(
+          onPressed: () async {
+            await ref.read(supabaseProvider).auth.signOut();
+          },
+          child: const Text('Cerrar sesión'),
+        ),
+      ],
+    );
+  }
+}
+
+/// Pantalla mostrada cuando NO SE PUDO verificar el acceso: red caída, RPC
+/// con error, token que no refrescó.
+///
+/// Existe porque antes este caso caía en "Acceso restringido" — un mensaje
+/// definitivo, que culpa a la cuenta, para un problema temporal, y cuya única
+/// salida era cerrar sesión y volver a chocar con lo mismo.
+class AccessCheckErrorPage extends ConsumerWidget {
+  const AccessCheckErrorPage({super.key, this.error});
+
+  final Object? error;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return _GateScreen(
+      icon: HugeIcons.strokeRoundedWifiDisconnected01,
+      iconColor: AppColors.warning,
+      title: 'No pudimos verificar tu acceso',
+      message:
+          'No se pudo confirmar tus permisos de operador. Suele ser un '
+          'problema de conexión — no es que tu cuenta esté bloqueada.',
+      footnote: error == null ? null : _shortError(error!),
+      actions: [
+        FilledButton(
+          onPressed: () => ref.invalidate(isPlatformOperatorProvider),
+          child: const Text('Reintentar'),
+        ),
+        OutlinedButton(
+          onPressed: () async {
+            await ref.read(supabaseProvider).auth.signOut();
+          },
+          child: const Text('Cerrar sesión'),
+        ),
+      ],
+    );
+  }
+
+  /// Una línea de diagnóstico, no el stack entero: quien lee esto está
+  /// atascado y solo necesita algo que copiar al reportarlo.
+  static String _shortError(Object error) {
+    final text = error is OperatorCheckException
+        ? error.cause.toString()
+        : error.toString();
+    final firstLine = text.split('\n').first.trim();
+    return firstLine.length > 140
+        ? '${firstLine.substring(0, 140)}…'
+        : firstLine;
   }
 }

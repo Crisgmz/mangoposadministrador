@@ -7,6 +7,8 @@ class RevenueHour {
     required this.label,
     required this.revenue,
     required this.transactions,
+    this.revenuePrev,
+    this.transactionsPrev,
   });
 
   final DateTime hour;
@@ -14,12 +16,24 @@ class RevenueHour {
   final double revenue;
   final int transactions;
 
+  /// Misma hora de AYER. `null` cuando la migración 0041 todavía no está
+  /// aplicada — el gráfico oculta la línea de comparación en ese caso en vez
+  /// de dibujar una serie plana en cero, que se leería como "ayer no vendimos".
+  final double? revenuePrev;
+  final int? transactionsPrev;
+
   factory RevenueHour.fromJson(Map<String, dynamic> json) {
     return RevenueHour(
       hour: DateTime.parse(json['hour'].toString()),
       label: (json['hour_label'] as String?) ?? '',
       revenue: _toDouble(json['revenue']),
       transactions: _toInt(json['transactions']),
+      revenuePrev: json.containsKey('revenue_prev')
+          ? _toDouble(json['revenue_prev'])
+          : null,
+      transactionsPrev: json.containsKey('transactions_prev')
+          ? _toInt(json['transactions_prev'])
+          : null,
     );
   }
 }

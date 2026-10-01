@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:hugeicons/hugeicons.dart';
 import 'package:intl/intl.dart';
@@ -50,7 +51,17 @@ class SubscriptionBillingSection extends ConsumerWidget {
               ),
             ),
             if (billingAsync.valueOrNull != null)
-              ..._headerActions(context, ref, billingAsync.valueOrNull!)
+              // Wrap y no Row: con trial + precio especial + editar son tres
+              // botones, y en un detalle angosto desbordaban la cabecera.
+              Flexible(
+                child: Wrap(
+                  alignment: WrapAlignment.end,
+                  spacing: 8,
+                  runSpacing: 8,
+                  children:
+                      _headerActions(context, ref, billingAsync.valueOrNull!),
+                ),
+              )
             else if (billingAsync.hasValue)
               OutlinedButton.icon(
                 onPressed: () => _edit(context, ref, null,
@@ -93,24 +104,31 @@ class SubscriptionBillingSection extends ConsumerWidget {
     SubscriptionBilling billing,
   ) {
     return [
-      if (billing.isTrial) ...[
+      if (billing.isTrial)
         FilledButton.icon(
           onPressed: () => _edit(context, ref, billing,
               preset: SubscriptionBillingPreset.activateProduction),
           icon: const Icon(HugeIcons.strokeRoundedRocket, size: 14),
           label: const Text('Quitar trial · Producción'),
-        ),
-        const SizedBox(width: 8),
-      ] else if (billing.billingStatus == 'suspended' ||
-          billing.billingStatus == 'cancelled') ...[
+        )
+      else if (billing.billingStatus == 'suspended' ||
+          billing.billingStatus == 'cancelled')
         FilledButton.icon(
           onPressed: () => _edit(context, ref, billing,
               preset: SubscriptionBillingPreset.activateProduction),
           icon: const Icon(HugeIcons.strokeRoundedRefresh, size: 14),
           label: const Text('Reactivar'),
         ),
-        const SizedBox(width: 8),
-      ],
+      // Sin plan no hay contra qué comparar el precio: el servidor lo rechaza,
+      // así que ni se ofrece.
+      if (billing.planCode != null)
+        OutlinedButton.icon(
+          onPressed: () => _editPrice(context, ref, billing),
+          icon: const Icon(HugeIcons.strokeRoundedTag01, size: 14),
+          label: Text(
+            billing.hasPriceOverride ? 'Precio especial' : 'Dar precio especial',
+          ),
+        ),
       OutlinedButton.icon(
         onPressed: () => _edit(context, ref, billing),
         icon: const Icon(HugeIcons.strokeRoundedCalendar03, size: 14),
@@ -176,6 +194,54 @@ class SubscriptionBillingSection extends ConsumerWidget {
       );
     }
   }
+
+  Future<void> _editPrice(
+    BuildContext context,
+    WidgetRef ref,
+    SubscriptionBilling billing,
+  ) async {
+    final result = await showDialog<PriceOverrideResult>(
+      context: context,
+      builder: (_) => PriceOverrideDialog(
+        businessName: businessName,
+        billing: billing,
+      ),
+    );
+    if (result == null || !context.mounted) return;
+    final repo = ref.read(subscriptionBillingRepositoryProvider);
+    try {
+      if (result.clear) {
+        await repo.clearPriceOverride(
+          businessId: businessId,
+          reason: result.reason,
+        );
+      } else {
+        await repo.setPriceOverride(
+          businessId: businessId,
+          priceMonthly: result.priceMonthly!,
+          endsOn: result.endsOn,
+          reason: result.reason,
+        );
+      }
+      ref.invalidate(subscriptionBillingProvider(businessId));
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            result.clear
+                ? '$businessName vuelve al precio de lista.'
+                : 'Precio especial de $businessName: '
+                    '${formatRd(result.priceMonthly!)}/mes.',
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error: $e')),
+      );
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -188,9 +254,6 @@ class _BillingCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final price = billing.priceCentsMonthly == null
-        ? null
-        : billing.priceCentsMonthly! / 100;
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
@@ -206,19 +269,7 @@ class _BillingCard extends StatelessWidget {
             children: [
               _StatusBadge(status: billing.billingStatus),
               const SizedBox(width: 10),
-              Expanded(
-                child: Text(
-                  billing.planName == null
-                      ? 'Sin plan asignado'
-                      : '${billing.planName}'
-                          '${price == null ? '' : ' · ${formatRd(price)}/mes'}',
-                  style: const TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                    color: AppColors.foreground,
-                  ),
-                ),
-              ),
+              Expanded(child: _PlanPriceLine(billing: billing)),
             ],
           ),
           const SizedBox(height: 14),
@@ -237,8 +288,22 @@ class _BillingCard extends StatelessWidget {
             billing.nextBillingDate == null
                 ? '—'
                 : '${_fmtDate(billing.nextBillingDate)} '
-                    '(${_remaining(billing.nextBillingDate!)})',
+                    '(${_remaining(billing.nextBillingDate!)})'
+                    '${billing.chargePriceCents == null ? '' : ' · ${formatRd(billing.chargePriceCents! / 100)}'}',
           ),
+          if (billing.priceOverrideApplies) ...[
+            _row('Precio especial', _savingsLabel()),
+            _row(
+              'Aplica hasta',
+              billing.priceOverrideEndsOn == null
+                  ? 'Sin vencimiento'
+                  : '${_fmtDate(billing.priceOverrideEndsOn)} '
+                      '(${_remaining(billing.priceOverrideEndsOn!)})',
+            ),
+            if (billing.priceOverrideReason != null)
+              _row('Motivo', billing.priceOverrideReason!),
+          ] else if (billing.priceOverrideStale)
+            _row('Precio especial', _staleOverrideLabel(), highlight: true),
           _row(
             'Período vigente',
             billing.currentPeriodStart == null &&
@@ -278,6 +343,34 @@ class _BillingCard extends StatelessWidget {
         ],
       ),
     );
+  }
+
+  /// "Ahorra RD$1,799.00 (37.5%)".
+  String _savingsLabel() {
+    final list = billing.priceCentsMonthly;
+    final effective = billing.effectivePriceCents;
+    if (list == null || effective == null || list <= 0) return '—';
+    final saved = list - effective;
+    return 'Ahorra ${formatRd(saved / 100)} (${_pct(saved / list)})';
+  }
+
+  /// Por qué un precio especial cargado NO se va a aplicar al próximo cobro.
+  String _staleOverrideLabel() {
+    final amount = formatRd(billing.priceOverrideCents! / 100);
+    final forPlan = billing.priceOverridePlanCode;
+    if (forPlan != null && forPlan != billing.planCode) {
+      return 'No aplica: $amount era para el plan $forPlan';
+    }
+    final ends = billing.priceOverrideEndsOn;
+    if (ends != null) {
+      final now = DateTime.now();
+      final expired = DateTime(ends.year, ends.month, ends.day)
+          .isBefore(DateTime(now.year, now.month, now.day));
+      return expired
+          ? 'Venció el ${_fmtDate(ends)} ($amount)'
+          : 'Vence el ${_fmtDate(ends)}, antes del próximo cobro';
+    }
+    return 'No aplica ($amount)';
   }
 
   Widget _row(String label, String value, {bool highlight = false}) {
@@ -756,6 +849,323 @@ class _DialogLabel extends StatelessWidget {
         letterSpacing: 0.4,
         color: AppColors.mutedForeground,
       ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Precio especial
+// ---------------------------------------------------------------------------
+
+/// 0.375 → "37.5%", 0.4 → "40%".
+String _pct(double ratio) {
+  final s = (ratio * 100).toStringAsFixed(1);
+  return '${s.endsWith('.0') ? s.substring(0, s.length - 2) : s}%';
+}
+
+/// Plan + precio en la cabecera de la tarjeta. Con precio especial vigente
+/// muestra lo que paga, la lista tachada y la marca: de un vistazo se ve que
+/// ese cliente no paga lo mismo que el resto.
+class _PlanPriceLine extends StatelessWidget {
+  const _PlanPriceLine({required this.billing});
+  final SubscriptionBilling billing;
+
+  static const _base = TextStyle(
+    fontSize: 13,
+    fontWeight: FontWeight.w600,
+    color: AppColors.foreground,
+  );
+
+  @override
+  Widget build(BuildContext context) {
+    final name = billing.planName;
+    if (name == null) return const Text('Sin plan asignado', style: _base);
+
+    final list = billing.priceCentsMonthly;
+    final effective = billing.effectivePriceCents;
+    if (!billing.priceOverrideApplies || list == null || effective == null) {
+      return Text(
+        '$name${list == null ? '' : ' · ${formatRd(list / 100)}/mes'}',
+        style: _base,
+      );
+    }
+
+    return Wrap(
+      spacing: 8,
+      runSpacing: 4,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        Text('$name · ${formatRd(effective / 100)}/mes', style: _base),
+        Text(
+          formatRd(list / 100),
+          style: const TextStyle(
+            fontSize: 12,
+            color: AppColors.mutedForeground,
+            decoration: TextDecoration.lineThrough,
+          ),
+        ),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+          decoration: BoxDecoration(
+            color: AppColors.accent.withValues(alpha: 0.12),
+            borderRadius: BorderRadius.circular(4),
+          ),
+          child: const Text(
+            'PRECIO ESPECIAL',
+            style: TextStyle(
+              fontSize: 9,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 1,
+              color: AppColors.accent,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// Lo que devuelve [PriceOverrideDialog].
+class PriceOverrideResult {
+  const PriceOverrideResult.set({
+    required this.reason,
+    required double this.priceMonthly,
+    this.endsOn,
+  }) : clear = false;
+
+  const PriceOverrideResult.clear({required this.reason})
+      : priceMonthly = null,
+        endsOn = null,
+        clear = true;
+
+  final String reason;
+  final double? priceMonthly;
+  final DateTime? endsOn;
+  final bool clear;
+}
+
+/// Dar, cambiar o quitar el precio especial de un cliente.
+///
+/// Muestra el ahorro en vivo contra el precio de lista: el error típico acá es
+/// de tipeo (47990 por 4799) y verlo como "debe ser menor al precio de lista"
+/// antes de guardar lo delata. El servidor igual lo rechaza.
+class PriceOverrideDialog extends StatefulWidget {
+  const PriceOverrideDialog({
+    required this.businessName,
+    required this.billing,
+    super.key,
+  });
+
+  final String businessName;
+  final SubscriptionBilling billing;
+
+  @override
+  State<PriceOverrideDialog> createState() => _PriceOverrideDialogState();
+}
+
+class _PriceOverrideDialogState extends State<PriceOverrideDialog> {
+  late final TextEditingController _priceController;
+  final _reasonController = TextEditingController();
+  late bool _hasEnd;
+  DateTime? _endsOn;
+
+  SubscriptionBilling get _b => widget.billing;
+
+  @override
+  void initState() {
+    super.initState();
+    final current = _b.priceOverrideCents;
+    _priceController = TextEditingController(
+      text: current == null ? '' : (current / 100).toStringAsFixed(2),
+    );
+    _endsOn = _b.priceOverrideEndsOn;
+    _hasEnd = _endsOn != null;
+  }
+
+  @override
+  void dispose() {
+    _priceController.dispose();
+    _reasonController.dispose();
+    super.dispose();
+  }
+
+  double? get _price {
+    final raw = _priceController.text.trim().replaceAll(',', '');
+    return raw.isEmpty ? null : double.tryParse(raw);
+  }
+
+  String? get _priceError {
+    if (_priceController.text.trim().isEmpty) return null;
+    final p = _price;
+    if (p == null || p <= 0) return 'Monto inválido';
+    final list = _b.priceCentsMonthly;
+    if (list != null && (p * 100).round() >= list) {
+      return 'Tiene que ser menor al precio de lista (${formatRd(list / 100)})';
+    }
+    return null;
+  }
+
+  String? get _endError {
+    if (!_hasEnd) return null;
+    final e = _endsOn;
+    if (e == null) return 'Elige hasta cuándo aplica';
+    final now = DateTime.now();
+    if (DateTime(e.year, e.month, e.day)
+        .isBefore(DateTime(now.year, now.month, now.day))) {
+      return 'No puede estar en el pasado';
+    }
+    return null;
+  }
+
+  String? get _savings {
+    final p = _price;
+    final list = _b.priceCentsMonthly;
+    if (p == null || list == null || list <= 0 || _priceError != null) {
+      return null;
+    }
+    final listRd = list / 100;
+    final saved = listRd - p;
+    return 'Ahorra ${formatRd(saved)}/mes (${_pct(saved / listRd)})';
+  }
+
+  bool get _reasonOk => _reasonController.text.trim().isNotEmpty;
+
+  bool get _canSave =>
+      _price != null && _priceError == null && _endError == null && _reasonOk;
+
+  @override
+  Widget build(BuildContext context) {
+    final list = _b.priceCentsMonthly;
+    return AlertDialog(
+      title: Text('Precio especial — ${widget.businessName}'),
+      content: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 440),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(12),
+                margin: const EdgeInsets.only(bottom: 14),
+                decoration: BoxDecoration(
+                  color: AppColors.accent.withValues(alpha: 0.08),
+                  border: Border.all(
+                    color: AppColors.accent.withValues(alpha: 0.25),
+                  ),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Text(
+                  'Plan ${_b.planName ?? _b.planCode ?? '—'}'
+                  '${list == null ? '' : ' · lista ${formatRd(list / 100)}/mes'}.\n'
+                  'Aplica solo mientras el negocio siga en este plan: si '
+                  'cambia de plan, vuelve al precio normal.',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    height: 1.4,
+                    color: AppColors.foreground,
+                  ),
+                ),
+              ),
+              const _DialogLabel('Precio mensual para este cliente'),
+              const SizedBox(height: 6),
+              TextField(
+                controller: _priceController,
+                autofocus: true,
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
+                inputFormatters: [
+                  FilteringTextInputFormatter.allow(RegExp(r'[0-9.,]')),
+                ],
+                decoration: InputDecoration(
+                  prefixText: 'RD\$ ',
+                  border: const OutlineInputBorder(),
+                  errorText: _priceError,
+                  helperText: _savings,
+                ),
+                onChanged: (_) => setState(() {}),
+              ),
+              const SizedBox(height: 8),
+              CheckboxListTile(
+                value: _hasEnd,
+                onChanged: (v) => setState(() => _hasEnd = v ?? false),
+                title: const Text(
+                  'Con fecha de vencimiento',
+                  style: TextStyle(fontSize: 13),
+                ),
+                subtitle: const Text(
+                  'Sin fecha, aplica hasta que lo quites.',
+                  style: TextStyle(fontSize: 11),
+                ),
+                contentPadding: EdgeInsets.zero,
+                dense: true,
+                controlAffinity: ListTileControlAffinity.leading,
+              ),
+              if (_hasEnd) ...[
+                _DateField(
+                  label: 'Aplica hasta (inclusive)',
+                  value: _endsOn,
+                  onChanged: (d) => setState(() => _endsOn = d),
+                ),
+                if (_endError != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: Text(
+                      _endError!,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: AppColors.destructive,
+                      ),
+                    ),
+                  ),
+              ],
+              const SizedBox(height: 14),
+              const _DialogLabel('Razón (obligatoria, queda en auditoría)'),
+              const SizedBox(height: 6),
+              TextField(
+                controller: _reasonController,
+                maxLines: 2,
+                minLines: 1,
+                decoration: const InputDecoration(
+                  hintText: 'Ej: cliente fundador, acuerdo comercial…',
+                  border: OutlineInputBorder(),
+                ),
+                onChanged: (_) => setState(() {}),
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        if (_b.hasPriceOverride)
+          TextButton(
+            style: TextButton.styleFrom(foregroundColor: AppColors.destructive),
+            onPressed: _reasonOk
+                ? () => Navigator.of(context).pop(
+                      PriceOverrideResult.clear(
+                        reason: _reasonController.text.trim(),
+                      ),
+                    )
+                : null,
+            child: const Text('Quitar precio especial'),
+          ),
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancelar'),
+        ),
+        FilledButton(
+          onPressed: _canSave
+              ? () => Navigator.of(context).pop(
+                    PriceOverrideResult.set(
+                      reason: _reasonController.text.trim(),
+                      priceMonthly: _price!,
+                      endsOn: _hasEnd ? _endsOn : null,
+                    ),
+                  )
+              : null,
+          child: const Text('Guardar'),
+        ),
+      ],
     );
   }
 }

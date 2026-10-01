@@ -13,6 +13,7 @@ class CompanySettings {
     this.logoUrl,
     this.paymentInstructions,
     this.updatedAt,
+    this.ecfOveragePriceCents = 0,
   });
 
   final String legalName;
@@ -26,6 +27,10 @@ class CompanySettings {
   final String? logoUrl;
   final String? paymentInstructions;
   final DateTime? updatedAt;
+
+  /// Precio global por factura electrónica extra, en centavos (migración
+  /// 0051). 0 = el extra no se cobra.
+  final int ecfOveragePriceCents;
 
   /// Concatena `address` + `city` para mostrar en una sola línea.
   String? get fullAddress {
@@ -51,6 +56,8 @@ class CompanySettings {
       updatedAt: json['updated_at'] == null
           ? null
           : DateTime.tryParse(json['updated_at'].toString()),
+      ecfOveragePriceCents:
+          (json['ecf_overage_price_cents'] as num?)?.toInt() ?? 0,
     );
   }
 

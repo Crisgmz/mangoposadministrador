@@ -1,15 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
 import 'package:hugeicons/hugeicons.dart';
 
 import '../../app/theme/app_colors.dart';
 import '../../core/format/formatters.dart';
-import '../../data/repositories/dashboard_repository.dart';
 import '../../data/repositories/pending_accounts_repository.dart';
 import '../../domain/models/pending_business.dart';
 import '../shared/page_header.dart';
-import 'pending_detail_dialog.dart';
+import 'pending_actions.dart';
 
 /// Lista de cuentas pendientes — la cola de trabajo del equipo de onboarding.
 class PendingAccountsPage extends ConsumerWidget {
@@ -347,56 +345,8 @@ class _PendingRow extends ConsumerWidget {
     );
   }
 
-  Future<void> _open(BuildContext context, WidgetRef ref) async {
-    final result = await showDialog<PendingDetailResult>(
-      context: context,
-      builder: (_) => PendingDetailDialog(item: item),
-    );
-    if (result == null || !context.mounted) return;
-
-    if (result.action == PendingDetailAction.openBusiness) {
-      context.go('/negocios/${item.businessId}');
-      return;
-    }
-
-    final repo = ref.read(pendingAccountsRepositoryProvider);
-    try {
-      switch (result.action) {
-        case PendingDetailAction.approve:
-          await repo.approve(
-            businessId: item.businessId,
-            reason: result.reason,
-          );
-          break;
-        case PendingDetailAction.reject:
-          await repo.reject(
-            businessId: item.businessId,
-            reason: result.reason ?? '',
-          );
-          break;
-        case PendingDetailAction.openBusiness:
-          return;
-      }
-      ref.invalidate(pendingAccountsListProvider);
-      ref.invalidate(pendingAccountsCountProvider);
-      ref.invalidate(platformOverviewProvider);
-      if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            result.action == PendingDetailAction.approve
-                ? '${item.businessName} aprobada.'
-                : '${item.businessName} rechazada.',
-          ),
-        ),
-      );
-    } catch (e) {
-      if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error: $e')),
-      );
-    }
-  }
+  Future<void> _open(BuildContext context, WidgetRef ref) =>
+      openPendingDetail(context, ref, item);
 }
 
 class _CardBadge extends StatelessWidget {

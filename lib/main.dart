@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
@@ -7,6 +8,7 @@ import 'package:intl/date_symbol_data_local.dart';
 
 import 'app/router/app_router.dart';
 import 'app/theme/app_theme.dart';
+import 'core/debug/load_timing_observer.dart';
 import 'core/network/supabase_client.dart';
 
 Future<void> main() async {
@@ -26,7 +28,15 @@ Future<void> main() async {
   ]);
   await initSupabase();
 
-  runApp(const ProviderScope(child: MangoPosAdminApp()));
+  runApp(
+    ProviderScope(
+      // En debug imprime en consola cuánto tarda cada carga de datos.
+      observers: kDebugMode
+          ? const [LoadTimingObserver()]
+          : const <ProviderObserver>[],
+      child: const MangoPosAdminApp(),
+    ),
+  );
 }
 
 class MangoPosAdminApp extends ConsumerWidget {

@@ -91,13 +91,18 @@ Future<Uint8List> buildInvoicePdf(
 }
 
 /// Lanza el preview/impresión nativo del PDF generado.
+///
+/// [bytes]: PDF ya generado con [buildInvoicePdf]. Sirve para generarlo
+/// detrás de un indicador de carga (descarga de fuentes y logo) y abrir el
+/// preview recién cuando está listo.
 Future<void> previewInvoicePdf(
   MembershipInvoice invoice, {
   CompanySettings company = CompanySettings.fallback,
+  Uint8List? bytes,
 }) async {
   await Printing.layoutPdf(
     name: 'Factura_${invoice.invoiceNumber}',
-    onLayout: (_) => buildInvoicePdf(invoice, company: company),
+    onLayout: (_) async => bytes ?? await buildInvoicePdf(invoice, company: company),
   );
 }
 
@@ -354,7 +359,18 @@ pw.Widget _amountTable(
           ),
         ),
         row('Membresía MangoPOS — Plan ${inv.planType.toUpperCase()}',
-            _money(inv.amount)),
+            _money(inv.amount - inv.ecfOverageAmount)),
+        // Facturas electrónicas por encima de lo incluido (migración 0051).
+        if (inv.ecfOverageAmount > 0) ...[
+          pw.Divider(color: _Brand.border, height: 1),
+          row(
+            inv.ecfExtra != null && inv.ecfUnitPriceCents != null
+                ? 'Facturas electrónicas extra '
+                    '(${inv.ecfExtra} × ${_money(inv.ecfUnitPriceCents! / 100)})'
+                : 'Facturas electrónicas extra',
+            _money(inv.ecfOverageAmount),
+          ),
+        ],
         // Solo desglosamos ITBIS si la factura efectivamente lo separa.
         // Para planes con tax_included=true, itbis=0 y no se muestra la línea.
         if (inv.itbis > 0) ...[

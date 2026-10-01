@@ -16,18 +16,38 @@ import '../../domain/models/company_settings.dart';
 import '../../domain/models/membership_invoice.dart';
 import '../dashboard/widgets/metric_card.dart';
 import '../shared/page_header.dart';
+import '../shared/pill_toggle.dart';
+import 'widgets/billing_matrix_view.dart';
+import 'widgets/mark_paid_dialog.dart';
+import 'widgets/payments_view.dart';
+import 'widgets/open_invoice.dart';
 
 final _selectedStatusFilter =
     StateProvider.autoDispose<InvoiceStatus?>((ref) => null);
+
+/// Facturas marcadas con la casilla para pagarlas juntas.
+final _selectedInvoiceIds =
+    StateProvider.autoDispose<Set<String>>((ref) => const {});
+
+/// Solo lo pendiente o vencido se puede marcar como pagado.
+bool _isPayable(MembershipInvoice i) =>
+    i.status == InvoiceStatus.pending || i.status == InvoiceStatus.expired;
+
+/// Las preguntas que se le hacen a esta pantalla son distintas: "¿a quién le
+/// cobro y cómo viene pagando?" (matriz), "¿qué pasa con esta factura?"
+/// (lista) y "¿qué me pagó cada negocio?" (pagos). Van en pestañas separadas en
+/// vez de apiladas.
+enum BillingTab { cobros, facturas, pagos }
+
+final _billingTab =
+    StateProvider.autoDispose<BillingTab>((ref) => BillingTab.cobros);
 
 class BillingPage extends ConsumerWidget {
   const BillingPage({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final invoicesAsync = ref.watch(filteredBillingOverviewProvider);
-    final metricsAsync = ref.watch(billingMetricsProvider);
-    final filter = ref.watch(_selectedStatusFilter);
+    final tab = ref.watch(_billingTab);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -35,50 +55,59 @@ class BillingPage extends ConsumerWidget {
         PageHeader(
           kicker: 'Facturación',
           title: 'Cobros y membresías',
-          subtitle:
+          subtitle: switch (tab) {
+            BillingTab.cobros =>
+              'Quién tiene tarjeta, cuándo se le cobra y cómo viene pagando mes a mes.',
+            BillingTab.facturas =>
               'Genera facturas de plan, registra pagos y marca cuentas vencidas.',
-          trailing: Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              OutlinedButton.icon(
-                onPressed: () => _generateForOne(context, ref),
-                icon: const Icon(HugeIcons.strokeRoundedFile02, size: 16),
-                label: const Text('Factura individual'),
-              ),
-              FilledButton.icon(
-                onPressed: () => _bulkGenerate(context, ref),
-                icon: const Icon(HugeIcons.strokeRoundedDownload01, size: 16),
-                label: const Text('Generar facturas del mes'),
-                style: FilledButton.styleFrom(
-                  backgroundColor: AppColors.primary,
-                  foregroundColor: Colors.white,
-                ),
-              ),
+            BillingTab.pagos =>
+              'Todo lo que pagó cada negocio: con tarjeta (se concilia solo) o registrado a mano.',
+          },
+          trailing: tab == BillingTab.facturas
+              ? Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    OutlinedButton.icon(
+                      onPressed: () => _generateForOne(context, ref),
+                      icon: const Icon(HugeIcons.strokeRoundedFile02, size: 16),
+                      label: const Text('Factura individual'),
+                    ),
+                    FilledButton.icon(
+                      onPressed: () => _bulkGenerate(context, ref),
+                      icon: const Icon(
+                        HugeIcons.strokeRoundedDownload01,
+                        size: 16,
+                      ),
+                      label: const Text('Generar facturas del mes'),
+                      style: FilledButton.styleFrom(
+                        backgroundColor: AppColors.primary,
+                        foregroundColor: Colors.white,
+                      ),
+                    ),
+                  ],
+                )
+              : null,
+        ),
+        const SizedBox(height: 20),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: PillToggle<BillingTab>(
+            options: const [
+              (value: BillingTab.cobros, label: 'Cobros'),
+              (value: BillingTab.facturas, label: 'Facturas'),
+              (value: BillingTab.pagos, label: 'Pagos'),
             ],
+            value: tab,
+            onChanged: (v) => ref.read(_billingTab.notifier).state = v,
           ),
         ),
-        const SizedBox(height: 28),
-        _MetricsRow(metricsAsync: metricsAsync),
         const SizedBox(height: 22),
-        invoicesAsync.when(
-          loading: () => const _Loader(),
-          error: (e, _) => _ErrorBox(message: 'Error: $e'),
-          data: (invoices) {
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                _Filters(invoices: invoices, current: filter),
-                const SizedBox(height: 14),
-                _InvoicesTable(
-                  invoices: filter == null
-                      ? invoices
-                      : invoices.where((i) => i.status == filter).toList(),
-                ),
-              ],
-            );
-          },
-        ),
+        switch (tab) {
+          BillingTab.cobros => const BillingMatrixView(),
+          BillingTab.facturas => const _InvoicesTab(),
+          BillingTab.pagos => const PaymentsView(),
+        },
       ],
     );
   }
@@ -99,6 +128,7 @@ class BillingPage extends ConsumerWidget {
       final inv = await ref.read(billingRepositoryProvider).generate(picked.id);
       ref.invalidate(billingOverviewProvider);
       ref.invalidate(billingMetricsProvider);
+      ref.invalidate(paymentsProvider);
       if (!context.mounted) return;
       final isNew = inv.issueDate
               .difference(DateTime.now())
@@ -146,6 +176,7 @@ class BillingPage extends ConsumerWidget {
     }
     ref.invalidate(billingOverviewProvider);
     ref.invalidate(billingMetricsProvider);
+      ref.invalidate(paymentsProvider);
     if (!context.mounted) return;
     final msg = created > 0
         ? 'Generadas $created facturas (saltadas $skipped por plan sin costo o ya existían).'
@@ -154,6 +185,46 @@ class BillingPage extends ConsumerWidget {
       SnackBar(
         content: Text(errors > 0 ? '$msg ($errors errores)' : msg),
       ),
+    );
+  }
+}
+
+/// Pestaña "Facturas": las métricas agregadas + la lista de facturas
+/// emitidas, con sus acciones (PDF, marcar pagada, anular).
+class _InvoicesTab extends ConsumerWidget {
+  const _InvoicesTab();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final invoicesAsync = ref.watch(filteredBillingOverviewProvider);
+    final metricsAsync = ref.watch(billingMetricsProvider);
+    final filter = ref.watch(_selectedStatusFilter);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _MetricsRow(metricsAsync: metricsAsync),
+        const SizedBox(height: 22),
+        invoicesAsync.when(
+          loading: () => const _Loader(),
+          error: (e, _) => _ErrorBox(message: 'Error: $e'),
+          data: (invoices) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _Filters(invoices: invoices, current: filter),
+                const SizedBox(height: 14),
+                _SelectionBar(invoices: invoices),
+                _InvoicesTable(
+                  invoices: filter == null
+                      ? invoices
+                      : invoices.where((i) => i.status == filter).toList(),
+                ),
+              ],
+            );
+          },
+        ),
+      ],
     );
   }
 }
@@ -353,7 +424,7 @@ class _InvoicesTable extends ConsumerWidget {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  _tableHeader(),
+                  _TableHeader(invoices: invoices),
                   const Divider(
                       height: 1, thickness: 1, color: AppColors.border),
                   for (var i = 0; i < invoices.length; i++) ...[
@@ -372,21 +443,165 @@ class _InvoicesTable extends ConsumerWidget {
       ),
     );
   }
+}
 
-  Widget _tableHeader() {
+class _TableHeader extends StatelessWidget {
+  const _TableHeader({required this.invoices});
+
+  /// Facturas visibles con el filtro actual: "seleccionar todo" actúa sobre
+  /// lo que el operador está viendo, no sobre lo que el filtro esconde.
+  final List<MembershipInvoice> invoices;
+
+  @override
+  Widget build(BuildContext context) {
     return Container(
       color: AppColors.muted.withValues(alpha: 0.4),
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-      child: const Row(
+      child: Row(
         children: [
-          Expanded(flex: 2, child: _HeadCell('Factura')),
-          Expanded(flex: 3, child: _HeadCell('Negocio')),
-          Expanded(flex: 1, child: _HeadCell('Plan')),
-          Expanded(flex: 2, child: _HeadCell('Total', align: TextAlign.right)),
-          Expanded(flex: 2, child: _HeadCell('Vence')),
-          Expanded(flex: 2, child: _HeadCell('Estado', align: TextAlign.center)),
-          SizedBox(width: 40),
+          SizedBox(width: 36, child: _SelectAllBox(invoices: invoices)),
+          const Expanded(flex: 2, child: _HeadCell('Factura')),
+          const Expanded(flex: 3, child: _HeadCell('Negocio')),
+          const Expanded(flex: 1, child: _HeadCell('Plan')),
+          const Expanded(
+            flex: 2,
+            child: _HeadCell('Total', align: TextAlign.right),
+          ),
+          const Expanded(flex: 2, child: _HeadCell('Vence')),
+          const Expanded(
+            flex: 2,
+            child: _HeadCell('Estado', align: TextAlign.center),
+          ),
+          const SizedBox(width: 40),
         ],
+      ),
+    );
+  }
+}
+
+class _SelectAllBox extends ConsumerWidget {
+  const _SelectAllBox({required this.invoices});
+  final List<MembershipInvoice> invoices;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final payable = invoices.where(_isPayable).map((i) => i.id).toSet();
+    if (payable.isEmpty) return const SizedBox.shrink();
+    final selected = ref.watch(_selectedInvoiceIds);
+    final count = payable.where(selected.contains).length;
+    return SizedBox(
+      height: 20,
+      child: Checkbox(
+        tristate: true,
+        value: count == 0 ? false : (count == payable.length ? true : null),
+        visualDensity: VisualDensity.compact,
+        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        onChanged: (_) {
+          final next = {...selected};
+          if (count == payable.length) {
+            next.removeAll(payable);
+          } else {
+            next.addAll(payable);
+          }
+          ref.read(_selectedInvoiceIds.notifier).state = next;
+        },
+      ),
+    );
+  }
+}
+
+class _RowCheckbox extends ConsumerWidget {
+  const _RowCheckbox({required this.invoice});
+  final MembershipInvoice invoice;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    if (!_isPayable(invoice)) return const SizedBox.shrink();
+    final selected = ref.watch(_selectedInvoiceIds).contains(invoice.id);
+    return Checkbox(
+      value: selected,
+      visualDensity: VisualDensity.compact,
+      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      onChanged: (v) {
+        final next = {...ref.read(_selectedInvoiceIds)};
+        if (v == true) {
+          next.add(invoice.id);
+        } else {
+          next.remove(invoice.id);
+        }
+        ref.read(_selectedInvoiceIds.notifier).state = next;
+      },
+    );
+  }
+}
+
+/// Barra que aparece al seleccionar facturas: cuántas, cuánto suman y la
+/// acción. Filtra por pagables, así las ya pagadas que quedaron marcadas tras
+/// un pago no reaparecen como "seleccionadas".
+class _SelectionBar extends ConsumerWidget {
+  const _SelectionBar({required this.invoices});
+  final List<MembershipInvoice> invoices;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final ids = ref.watch(_selectedInvoiceIds);
+    final selected = invoices
+        .where((i) => ids.contains(i.id) && _isPayable(i))
+        .toList(growable: false);
+    if (selected.isEmpty) return const SizedBox.shrink();
+    final total = selected.fold<double>(0, (s, i) => s + i.total);
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        decoration: BoxDecoration(
+          color: AppColors.primary.withValues(alpha: 0.08),
+          border: Border.all(color: AppColors.primary.withValues(alpha: 0.25)),
+          borderRadius: BorderRadius.circular(14),
+        ),
+        child: Row(
+          children: [
+            const Icon(
+              HugeIcons.strokeRoundedCheckList,
+              size: 18,
+              color: AppColors.primary,
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                '${selected.length} '
+                '${selected.length == 1 ? "factura seleccionada" : "facturas seleccionadas"}'
+                ' · ${formatRd(total)}',
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.foreground,
+                ),
+              ),
+            ),
+            TextButton(
+              onPressed: () =>
+                  ref.read(_selectedInvoiceIds.notifier).state = const {},
+              child: const Text('Limpiar'),
+            ),
+            const SizedBox(width: 6),
+            FilledButton.icon(
+              onPressed: () => showMarkPaidDialog(context, ref, [
+                for (final i in selected)
+                  PayableInvoice(
+                    id: i.id,
+                    number: i.invoiceNumber,
+                    businessId: i.businessId,
+                    businessName: i.businessName,
+                    total: i.total,
+                  ),
+              ]),
+              icon: const Icon(HugeIcons.strokeRoundedTick02, size: 16),
+              label: const Text('Marcar como pagadas'),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -418,83 +633,89 @@ class _InvoiceRow extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          Expanded(
-            flex: 2,
-            child: Text(
-              invoice.invoiceNumber,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                fontSize: 12,
-                fontFamily: 'monospace',
-                fontWeight: FontWeight.w600,
-                color: AppColors.foreground,
-              ),
-            ),
-          ),
-          Expanded(
-            flex: 3,
-            child: InkWell(
-              onTap: () => context.go('/negocios/${invoice.businessId}'),
+    // Tocar la fila abre la factura. El checkbox, el nombre del negocio y el
+    // menú tienen su propio tap y ganan sobre este.
+    return InkWell(
+      onTap: () => openInvoicePdf(context, invoice),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            SizedBox(width: 36, child: _RowCheckbox(invoice: invoice)),
+            Expanded(
+              flex: 2,
               child: Text(
-                invoice.businessName,
+                invoice.invoiceNumber,
                 overflow: TextOverflow.ellipsis,
                 style: const TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w500,
+                  fontSize: 12,
+                  fontFamily: 'monospace',
+                  fontWeight: FontWeight.w600,
                   color: AppColors.foreground,
                 ),
               ),
             ),
-          ),
-          Expanded(
-            flex: 1,
-            child: Text(
-              invoice.planType.toUpperCase(),
-              style: const TextStyle(
-                fontSize: 11,
-                fontWeight: FontWeight.w700,
-                letterSpacing: 0.6,
-                color: AppColors.mutedForeground,
+            Expanded(
+              flex: 3,
+              child: InkWell(
+                onTap: () => context.go('/negocios/${invoice.businessId}'),
+                child: Text(
+                  invoice.businessName,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w500,
+                    color: AppColors.foreground,
+                  ),
+                ),
               ),
             ),
-          ),
-          Expanded(
-            flex: 2,
-            child: Text(
-              formatRd(invoice.total),
-              textAlign: TextAlign.right,
-              style: const TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-                fontFeatures: [FontFeature.tabularFigures()],
-                color: AppColors.foreground,
+            Expanded(
+              flex: 1,
+              child: Text(
+                invoice.planType.toUpperCase(),
+                style: const TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.6,
+                  color: AppColors.mutedForeground,
+                ),
               ),
             ),
-          ),
-          Expanded(
-            flex: 2,
-            child: Text(
-              DateFormat('dd MMM', 'es_DO').format(invoice.dueDate),
-              style: const TextStyle(
-                fontSize: 12,
-                color: AppColors.mutedForeground,
+            Expanded(
+              flex: 2,
+              child: Text(
+                formatRd(invoice.total),
+                textAlign: TextAlign.right,
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  fontFeatures: [FontFeature.tabularFigures()],
+                  color: AppColors.foreground,
+                ),
               ),
             ),
-          ),
-          Expanded(
-            flex: 2,
-            child: Center(child: _StatusBadge(status: invoice.status)),
-          ),
-          SizedBox(
-            width: 40,
-            child: _ActionMenu(invoice: invoice),
-          ),
-        ],
+            Expanded(
+              flex: 2,
+              child: Text(
+                DateFormat('dd MMM', 'es_DO').format(invoice.dueDate),
+                style: const TextStyle(
+                  fontSize: 12,
+                  color: AppColors.mutedForeground,
+                ),
+              ),
+            ),
+            Expanded(
+              flex: 2,
+              child: Center(child: _StatusBadge(status: invoice.status)),
+            ),
+            SizedBox(
+              width: 40,
+              child: _ActionMenu(invoice: invoice),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -582,81 +803,20 @@ class _ActionMenu extends ConsumerWidget {
           case 'share':
             await shareInvoicePdf(invoice, company: company);
           case 'pay':
-            await _payDialog(context, ref);
+            await showMarkPaidDialog(context, ref, [
+              PayableInvoice(
+                id: invoice.id,
+                number: invoice.invoiceNumber,
+                businessId: invoice.businessId,
+                businessName: invoice.businessName,
+                total: invoice.total,
+              ),
+            ]);
           case 'void':
             await _voidDialog(context, ref);
         }
       },
     );
-  }
-
-  Future<void> _payDialog(BuildContext context, WidgetRef ref) async {
-    final method = TextEditingController();
-    final reference = TextEditingController();
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Registrar pago'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              'Factura ${invoice.invoiceNumber} · ${formatRd(invoice.total)}',
-              style: const TextStyle(
-                fontSize: 12,
-                color: AppColors.mutedForeground,
-              ),
-            ),
-            const SizedBox(height: 14),
-            TextField(
-              controller: method,
-              decoration: const InputDecoration(
-                labelText: 'Método (cash, transfer, card…)',
-              ),
-            ),
-            const SizedBox(height: 10),
-            TextField(
-              controller: reference,
-              decoration: const InputDecoration(
-                labelText: 'Referencia (opcional)',
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text('Cancelar'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text('Registrar'),
-          ),
-        ],
-      ),
-    );
-    if (ok != true || !context.mounted) return;
-    try {
-      await ref.read(billingRepositoryProvider).markPaid(
-            invoice.id,
-            method: method.text.trim().isEmpty ? 'cash' : method.text.trim(),
-            reference: reference.text.trim().isEmpty
-                ? null
-                : reference.text.trim(),
-          );
-      ref.invalidate(billingOverviewProvider);
-      ref.invalidate(billingMetricsProvider);
-      ref.invalidate(businessInvoicesProvider(invoice.businessId));
-      if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Factura ${invoice.invoiceNumber} pagada.')),
-      );
-    } catch (e) {
-      if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error: $e')),
-      );
-    }
   }
 
   Future<void> _voidDialog(BuildContext context, WidgetRef ref) async {
@@ -714,6 +874,7 @@ class _ActionMenu extends ConsumerWidget {
           );
       ref.invalidate(billingOverviewProvider);
       ref.invalidate(billingMetricsProvider);
+      ref.invalidate(paymentsProvider);
       ref.invalidate(businessInvoicesProvider(invoice.businessId));
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(

@@ -82,23 +82,38 @@ final routerProvider = Provider<GoRouter>((ref) {
           return Consumer(
             builder: (context, ref, _) {
               final operatorAsync = ref.watch(isPlatformOperatorProvider);
-              return operatorAsync.when(
-                loading: () => const _SplashLoading(),
-                error: (_, _) => const ForbiddenPage(),
-                data: (isOp) {
-                  if (!isOp) return const ForbiddenPage();
-                  final mustChangeAsync = ref.watch(mustChangePasswordProvider);
-                  return mustChangeAsync.when(
-                    loading: () => const _SplashLoading(),
-                    // Si el RPC falla por cualquier razón, dejamos pasar al
-                    // shell — el flag se chequeará otra vez en el próximo refresh.
-                    error: (_, _) => AppShell(child: child),
-                    data: (mustChange) => mustChange
-                        ? const ChangePasswordPage()
-                        : AppShell(child: child),
-                  );
-                },
-              );
+
+              // Se observa ACÁ ARRIBA, antes de los returns de abajo, para que
+              // su RPC salga junto con el del chequeo de operador. Observado
+              // más abajo, recién arrancaba cuando el otro terminaba: dos
+              // viajes al servidor en fila antes de pintar la primera pantalla.
+              final mustChangeAsync = ref.watch(mustChangePasswordProvider);
+
+              // Revalidación en caliente (el token se refresca solo cada
+              // hora): si ya sabemos que es operador, se sigue mostrando la
+              // consola en vez de tapar todo con el splash. Antes, cada
+              // refresh de sesión parpadeaba la app entera.
+              final known = operatorAsync.valueOrNull;
+              if (operatorAsync.isLoading && known == null) {
+                return const _SplashLoading();
+              }
+              if (operatorAsync.hasError && known == null) {
+                // No se pudo VERIFICAR — no es lo mismo que estar bloqueado.
+                return AccessCheckErrorPage(error: operatorAsync.error);
+              }
+              if (known != true) return const ForbiddenPage();
+
+              // Mismo criterio para el flag de cambio de clave: solo tapa la
+              // pantalla la PRIMERA vez; después se resuelve en segundo plano.
+              // Si el RPC falla, se deja pasar (se reevalúa en el próximo
+              // refresh) — es un chequeo secundario, no la puerta.
+              final mustChange = mustChangeAsync.valueOrNull;
+              if (mustChange == null && mustChangeAsync.isLoading) {
+                return const _SplashLoading();
+              }
+              return mustChange == true
+                  ? const ChangePasswordPage()
+                  : AppShell(child: child);
             },
           );
         },

@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:hugeicons/hugeicons.dart';
+import 'package:flutter/services.dart';
+import '../../core/format/formatters.dart';
+import '../../data/repositories/ecf_quota_repository.dart';
 
 import '../../app/theme/app_colors.dart';
 import '../../core/io/web_file_picker.dart';
@@ -44,7 +47,14 @@ class SettingsPage extends ConsumerWidget {
               style: const TextStyle(color: AppColors.destructive),
             ),
           ),
-          data: (settings) => _CompanyForm(settings: settings),
+          data: (settings) => Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _CompanyForm(settings: settings),
+              const SizedBox(height: 24),
+              _EcfPriceCard(priceCents: settings.ecfOveragePriceCents),
+            ],
+          ),
         ),
       ],
     );
@@ -503,6 +513,135 @@ class _LogoUploaderState extends ConsumerState<_LogoUploader> {
               ),
             ],
           ],
+        ],
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Precio global por factura electrónica extra (migración 0051)
+// ---------------------------------------------------------------------------
+
+/// Se guarda aparte del formulario de la empresa: es un precio de cobro, no un
+/// dato del emisor, y cambiarlo no tiene que depender de validar ese form.
+class _EcfPriceCard extends ConsumerStatefulWidget {
+  const _EcfPriceCard({required this.priceCents});
+
+  final int priceCents;
+
+  @override
+  ConsumerState<_EcfPriceCard> createState() => _EcfPriceCardState();
+}
+
+class _EcfPriceCardState extends ConsumerState<_EcfPriceCard> {
+  late final _controller = TextEditingController(
+    text: (widget.priceCents / 100).toStringAsFixed(2),
+  );
+  bool _saving = false;
+
+  static final _amountPattern = RegExp(r'^\d+(\.\d{1,2})?$');
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  int? get _cents {
+    final raw = _controller.text.trim().replaceAll(',', '');
+    if (!_amountPattern.hasMatch(raw)) return null;
+    return (double.parse(raw) * 100).round();
+  }
+
+  bool get _canSave =>
+      !_saving && _cents != null && _cents != widget.priceCents;
+
+  Future<void> _save() async {
+    final cents = _cents!;
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() => _saving = true);
+    try {
+      await ref.read(ecfQuotaRepositoryProvider).setGlobalPrice(cents);
+      ref.invalidate(companySettingsProvider);
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            cents == 0
+                ? 'Precio en 0: las facturas electrónicas extra no se cobran.'
+                : 'Precio guardado: ${formatRd(cents / 100)} por factura electrónica extra.',
+          ),
+        ),
+      );
+    } catch (e) {
+      messenger.showSnackBar(
+        SnackBar(content: Text('No se pudo guardar el precio: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(24),
+      decoration: BoxDecoration(
+        color: AppColors.card,
+        border: Border.all(color: AppColors.border, width: 0.6),
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Facturas electrónicas extra',
+            style: TextStyle(
+              fontSize: 15,
+              fontWeight: FontWeight.w700,
+              color: AppColors.foreground,
+            ),
+          ),
+          const SizedBox(height: 4),
+          const Text(
+            'Precio por cada factura electrónica aceptada por encima de la '
+            'cantidad incluida de un negocio. Aplica a los negocios sin precio '
+            'propio. En 0, el extra no se cobra.',
+            style: TextStyle(
+              fontSize: 12,
+              height: 1.4,
+              color: AppColors.mutedForeground,
+            ),
+          ),
+          const SizedBox(height: 16),
+          Wrap(
+            spacing: 12,
+            runSpacing: 12,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              SizedBox(
+                width: 200,
+                child: TextField(
+                  controller: _controller,
+                  keyboardType:
+                      const TextInputType.numberWithOptions(decimal: true),
+                  inputFormatters: [
+                    FilteringTextInputFormatter.allow(RegExp(r'[0-9.,]')),
+                  ],
+                  decoration: const InputDecoration(
+                    labelText: 'Precio por factura extra',
+                    prefixText: 'RD\$ ',
+                    isDense: true,
+                  ),
+                  onChanged: (_) => setState(() {}),
+                ),
+              ),
+              FilledButton(
+                onPressed: _canSave ? _save : null,
+                child: Text(_saving ? 'Guardando…' : 'Guardar precio'),
+              ),
+            ],
+          ),
         ],
       ),
     );

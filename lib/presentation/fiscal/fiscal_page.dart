@@ -5,10 +5,14 @@ import 'package:intl/intl.dart';
 
 import '../../app/theme/app_colors.dart';
 import '../../core/format/formatters.dart';
+import '../../data/repositories/ecf_onboarding_repository.dart';
 import '../../data/repositories/fiscal_health_repository.dart';
 import '../../domain/models/fiscal_health.dart';
 import '../shared/business_avatar.dart';
 import '../shared/page_header.dart';
+import 'ecf_requests_section.dart';
+import '../../data/repositories/external_ecf_requests_repository.dart';
+import 'external_ecf_requests_section.dart';
 
 /// NOC Fiscal (PRD-12 Fase 3): e-CFs stuck/rechazados y secuencias NCF
 /// próximas a agotarse o vencer.
@@ -30,6 +34,8 @@ class FiscalPage extends ConsumerWidget {
           subtitle: 'Estado de e-CFs y secuencias NCF cross-tenant.',
           trailing: OutlinedButton.icon(
             onPressed: () {
+              ref.invalidate(ecfRequestsProvider);
+              ref.invalidate(externalEcfRequestsProvider);
               ref.invalidate(fiscalHealthSummaryProvider);
               ref.invalidate(fiscalProblemsProvider);
               ref.invalidate(ncfSequencesProvider);
@@ -39,6 +45,8 @@ class FiscalPage extends ConsumerWidget {
           ),
         ),
         const SizedBox(height: 24),
+        const EcfRequestsSection(),
+        const ExternalEcfRequestsSection(),
         summaryAsync.when(
           loading: _loader,
           error: (e, _) => _err('Error métricas: $e'),

@@ -1,3 +1,6 @@
+import 'dart:async';
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:hugeicons/hugeicons.dart';
@@ -7,49 +10,104 @@ import '../../app/theme/app_colors.dart';
 import '../../app/theme/breakpoints.dart';
 import '../../core/format/formatters.dart';
 import '../../data/repositories/dashboard_repository.dart';
+import '../../data/repositories/pending_accounts_repository.dart';
 import '../../domain/models/business_overview.dart';
 import '../incidents/widgets/critical_incidents_banner.dart';
-import 'widgets/alerts_panel.dart';
+import 'action_queue.dart';
+import 'widgets/action_queue_panel.dart';
 import 'widgets/business_table.dart';
-import 'widgets/metric_card.dart';
+import 'widgets/kpi_strip.dart';
 import 'widgets/operating_now_sheet.dart';
 import 'widgets/revenue_chart.dart';
+import 'widgets/side_panels.dart';
 
 /// Vista global — pantalla principal de la consola operadora.
 ///
-/// Lee `get_platform_overview`, `get_revenue_trend_12h` y `get_platform_alerts`
-/// vía sus providers en `dashboard_repository.dart`. Refresh manual con el
-/// botón del header (invalida los tres providers).
-class DashboardPage extends ConsumerWidget {
+/// El orden de la página ES la decisión de diseño: qué mira el operador
+/// primero. De arriba a abajo:
+///
+///   1. Cinta de KPIs — el estado en una franja, no en ocho tarjetas.
+///   2. Requiere acción — la cola priorizada, con el botón en la fila.
+///   3. Ingresos 12 h contra ayer — el pulso del negocio.
+///   4. Negocios ordenados por riesgo — el detalle, cuando hace falta.
+///
+/// En móvil la bandeja sube al primer lugar: quien abre esto desde el
+/// teléfono va a apagar un fuego, no a leer métricas.
+class DashboardPage extends ConsumerStatefulWidget {
   const DashboardPage({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<DashboardPage> createState() => _DashboardPageState();
+}
+
+class _DashboardPageState extends ConsumerState<DashboardPage> {
+  /// Cuándo llegaron los datos que se están viendo. Alimenta el "datos hace
+  /// Xs" del header: sin eso, una consola en vivo no dice si lo que muestra
+  /// es de hace cuatro segundos o de hace cuarenta minutos.
+  ///
+  /// Es un [ValueNotifier] y no estado del widget a propósito. Con `setState`
+  /// —y un timer de un segundo para refrescar la etiqueta— la página ENTERA
+  /// se reconstruía cada segundo: gráfico, tabla y bandeja incluidos. Eso se
+  /// comía el presupuesto de frame y hacía que todo, incluida la navegación,
+  /// se sintiera pesado. Ahora solo se repinta el texto de frescura.
+  final ValueNotifier<DateTime> _lastData = ValueNotifier(DateTime.now());
+
+  @override
+  void dispose() {
+    _lastData.dispose();
+    super.dispose();
+  }
+
+  void _refresh() {
+    // Invalidar las FUENTES; los providers derivados se recalculan solos.
+    ref.invalidate(platformOverviewProvider);
+    ref.invalidate(revenueTrend12hProvider);
+    ref.invalidate(platformAlertsProvider);
+    ref.invalidate(businessWeekTrendProvider);
+    ref.invalidate(pendingAccountsListProvider);
+    ref.invalidate(pendingAccountsCountProvider);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    ref.listen<AsyncValue<List<BusinessOverview>>>(platformOverviewProvider, (
+      _,
+      next,
+    ) {
+      if (next.hasValue && !next.isLoading) {
+        _lastData.value = DateTime.now();
+      }
+    });
+
     final overviewAsync = ref.watch(filteredOverviewProvider);
     final isWide = Breakpoints.isDesktop(context);
+    final rows = overviewAsync.value ?? const <BusinessOverview>[];
+    final metrics = _PlatformMetrics.from(rows);
+    final queueCount = ref.watch(actionQueueProvider).valueOrNull?.length ?? 0;
+    final criticals = ref.watch(criticalActionCountProvider);
 
-    // El scroll vertical lo provee `AppShell._ContentArea`. Aquí solo
-    // emitimos la columna de contenido — anidar otro SingleChildScrollView
-    // bloquearía el scroll global.
+    // El scroll vertical lo provee `AppShell.ContentArea`. Aquí solo emitimos
+    // la columna de contenido — anidar otro scroll bloquearía el global.
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         _Header(
-          activeBusinessCount: overviewAsync.value
-              ?.where((b) => b.isActive)
-              .length,
-          onRefresh: () {
-            // Invalidar las FUENTES; los providers filtrados se re-derivan solos.
-            ref.invalidate(platformOverviewProvider);
-            ref.invalidate(revenueTrend12hProvider);
-            ref.invalidate(platformAlertsProvider);
-            ref.invalidate(businessWeekTrendProvider);
-          },
+          metrics: metrics,
+          criticals: criticals,
+          lastData: _lastData,
+          onRefresh: _refresh,
         ),
         const SizedBox(height: 20),
-        // Banner visible solo cuando hay incidentes críticos abiertos.
         const CriticalIncidentsBanner(),
         const SizedBox(height: 16),
+
+        if (!isWide) ...[
+          // Móvil: primero lo que exige acción, recortado a tres filas para
+          // que los KPIs y el gráfico sigan alcanzándose con un scroll.
+          const ActionQueuePanel(maxRows: 3),
+          const SizedBox(height: 16),
+        ],
+
         overviewAsync.when(
           loading: () => const Padding(
             padding: EdgeInsets.symmetric(vertical: 32),
@@ -68,40 +126,162 @@ class DashboardPage extends ConsumerWidget {
               style: const TextStyle(color: AppColors.destructive),
             ),
           ),
-          data: (rows) => _MetricsGrid(overview: rows),
-        ),
-        const SizedBox(height: 24),
-        // Chart + AlertsPanel: lado a lado en lg+, apilados en mobile/tablet.
-        if (isWide)
-          SizedBox(
-            height: 360,
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                const Expanded(flex: 2, child: RevenueChart()),
-                const SizedBox(width: 20),
-                const Expanded(flex: 1, child: AlertsPanel()),
-              ],
+          data: (data) => KpiStrip(
+            cells: _kpiCells(
+              context,
+              metrics: metrics,
+              rows: data,
+              queueCount: queueCount,
+              criticals: criticals,
             ),
-          )
-        else ...[
-          const RevenueChart(),
+          ),
+        ),
+        const SizedBox(height: 20),
+
+        if (isWide) ...[
+          // La bandeja lleva alto fijo y las cards laterales el suyo propio:
+          // así la columna derecha no se estira con huecos cuando hay pocas
+          // cuentas pendientes.
+          const Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(flex: 19, child: ActionQueuePanel(height: 436)),
+              SizedBox(width: 20),
+              Expanded(
+                flex: 10,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    PendingAccountsCard(),
+                    SizedBox(height: 16),
+                    ExpiringMembershipsCard(),
+                  ],
+                ),
+              ),
+            ],
+          ),
           const SizedBox(height: 20),
-          const SizedBox(height: 360, child: AlertsPanel()),
         ],
-        const SizedBox(height: 24),
-        const BusinessTable(),
+
+        const RevenueChart(),
+        const SizedBox(height: 20),
+
+        if (!isWide) ...[
+          const PendingAccountsCard(),
+          const SizedBox(height: 16),
+          const ExpiringMembershipsCard(),
+          const SizedBox(height: 20),
+        ],
+
+        // En Vista Global la tabla es un resumen: las primeras filas por
+        // riesgo y un enlace al listado completo.
+        BusinessTable(
+          maxRows: isWide ? 6 : 3,
+          title: isWide ? 'Negocios' : 'Negocios en riesgo',
+          showToolbar: isWide,
+        ),
         const SizedBox(height: 32),
       ],
     );
   }
+
+  List<KpiCell> _kpiCells(
+    BuildContext context, {
+    required _PlatformMetrics metrics,
+    required List<BusinessOverview> rows,
+    required int queueCount,
+    required int criticals,
+  }) {
+    final ratio = metrics.activeBusinesses == 0
+        ? 0.0
+        : metrics.businessesOnline / metrics.activeBusinesses;
+    final ticket = metrics.totalSalesToday > 0
+        ? metrics.totalRevenueToday / metrics.totalSalesToday
+        : 0.0;
+
+    return [
+      KpiCell(
+        label: 'OPERANDO AHORA',
+        value: '${metrics.businessesOnline}/${metrics.activeBusinesses}',
+        sublabel: metrics.agentsDown > 0
+            ? '${metrics.agentsDown} sin latido'
+            : 'todos con latido',
+        icon: KpiIcons.operating,
+        color: AppColors.primary,
+        progress: ratio,
+        onTap: () => showOperatingNowSheet(context, rows),
+      ),
+      KpiCell(
+        label: 'REQUIERE ACCIÓN',
+        value: '$queueCount',
+        sublabel: criticals > 0
+            ? '$criticals ${criticals == 1 ? "crítica" : "críticas"}'
+            : 'nada crítico',
+        icon: KpiIcons.inbox,
+        color: criticals > 0
+            ? AppColors.destructive
+            : AppColors.mutedForeground,
+      ),
+      KpiCell(
+        label: 'INGRESOS HOY',
+        value: formatRdShort(metrics.totalRevenueToday),
+        sublabel:
+            '${formatInt(metrics.totalSalesToday)} tx · ticket '
+            '${formatRdCompact(ticket)}',
+        icon: KpiIcons.revenue,
+        color: AppColors.accent,
+      ),
+      KpiCell(
+        label: 'NCF EMITIDOS',
+        value: formatInt(metrics.totalNcfToday),
+        sublabel: metrics.ncfLow > 0
+            ? '${metrics.ncfLow} ${metrics.ncfLow == 1 ? "secuencia baja" : "secuencias bajas"}'
+            : 'stock saludable',
+        icon: KpiIcons.ncf,
+        color: metrics.ncfCritical > 0
+            ? AppColors.destructive
+            : AppColors.primary,
+      ),
+      KpiCell(
+        label: 'FALLAS IMPR. 24H',
+        value: formatInt(metrics.printFailures24h),
+        sublabel: metrics.businessesWithFailures > 0
+            ? 'en ${metrics.businessesWithFailures} '
+                  '${metrics.businessesWithFailures == 1 ? "negocio" : "negocios"}'
+            : 'sin fallas',
+        icon: KpiIcons.printing,
+        color: metrics.printFailures24h > 30
+            ? AppColors.destructive
+            : AppColors.warning,
+      ),
+    ];
+  }
 }
 
 class _Header extends StatelessWidget {
-  const _Header({this.activeBusinessCount, required this.onRefresh});
+  const _Header({
+    required this.metrics,
+    required this.criticals,
+    required this.lastData,
+    required this.onRefresh,
+  });
 
-  final int? activeBusinessCount;
+  final _PlatformMetrics metrics;
+  final int criticals;
+  final ValueListenable<DateTime> lastData;
   final VoidCallback onRefresh;
+
+  String get _subtitle {
+    final parts = <String>[
+      '${metrics.activeBusinesses} '
+          '${metrics.activeBusinesses == 1 ? "negocio activo" : "negocios activos"}',
+      '${metrics.businessesOnline} operando ahora',
+      if (criticals > 0)
+        '$criticals ${criticals == 1 ? "requiere" : "requieren"} atención '
+            'inmediata',
+    ];
+    return parts.join(' · ');
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -112,7 +292,7 @@ class _Header extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(
+            const Text(
               'VISTA GLOBAL',
               style: TextStyle(
                 fontSize: 11,
@@ -130,9 +310,7 @@ class _Header extends StatelessWidget {
             ),
             const SizedBox(height: 6),
             Text(
-              activeBusinessCount == null
-                  ? 'Resumen ejecutivo de la plataforma MangoPOS.'
-                  : 'Resumen ejecutivo de los ${activeBusinessCount!} negocios activos en MangoPOS.',
+              _subtitle,
               style: const TextStyle(
                 fontSize: 13,
                 color: AppColors.mutedForeground,
@@ -143,13 +321,24 @@ class _Header extends StatelessWidget {
 
         final right = Row(
           mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const _Clock(),
+            // Reloj y "hace Xs" repintan cada segundo: en su propia capa, así
+            // no arrastran al encabezado ni a la página.
+            const RepaintBoundary(child: _Clock()),
             const SizedBox(width: 10),
-            OutlinedButton.icon(
-              onPressed: onRefresh,
-              icon: const Icon(HugeIcons.strokeRoundedRefresh, size: 16),
-              label: const Text('Actualizar'),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                OutlinedButton.icon(
+                  onPressed: onRefresh,
+                  icon: const Icon(HugeIcons.strokeRoundedRefresh, size: 16),
+                  label: const Text('Actualizar'),
+                ),
+                const SizedBox(height: 3),
+                RepaintBoundary(child: _DataFreshness(lastData: lastData)),
+              ],
             ),
           ],
         );
@@ -168,6 +357,50 @@ class _Header extends StatelessWidget {
           ],
         );
       },
+    );
+  }
+}
+
+/// "datos hace 4s". Tiene su propio timer y se repinta solo él: es la única
+/// parte del header que necesita cambiar cada segundo.
+class _DataFreshness extends StatefulWidget {
+  const _DataFreshness({required this.lastData});
+
+  final ValueListenable<DateTime> lastData;
+
+  @override
+  State<_DataFreshness> createState() => _DataFreshnessState();
+}
+
+class _DataFreshnessState extends State<_DataFreshness> {
+  Timer? _ticker;
+
+  @override
+  void initState() {
+    super.initState();
+    _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _ticker?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<DateTime>(
+      valueListenable: widget.lastData,
+      builder: (context, value, _) => Text(
+        'datos ${formatRelative(value)}',
+        style: const TextStyle(
+          fontSize: 10.5,
+          fontFamily: 'monospace',
+          color: AppColors.mutedForeground,
+        ),
+      ),
     );
   }
 }
@@ -224,6 +457,7 @@ class _ClockState extends State<_Clock> {
               const SizedBox(height: 2),
               Row(
                 mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
                   Text(
                     formatted,
@@ -252,162 +486,48 @@ class _ClockState extends State<_Clock> {
   }
 }
 
-class _MetricsGrid extends StatelessWidget {
-  const _MetricsGrid({required this.overview});
-  final List<BusinessOverview> overview;
+/// Agregados de plataforma que alimentan header y cinta de KPIs.
+class _PlatformMetrics {
+  const _PlatformMetrics({
+    required this.activeBusinesses,
+    required this.businessesOnline,
+    required this.agentsDown,
+    required this.totalRevenueToday,
+    required this.totalSalesToday,
+    required this.totalNcfToday,
+    required this.ncfCritical,
+    required this.ncfLow,
+    required this.printFailures24h,
+    required this.businessesWithFailures,
+  });
 
-  @override
-  Widget build(BuildContext context) {
-    final m = _aggregate(overview);
+  final int activeBusinesses;
 
-    final activeRatio = m.activeBusinesses == 0
-        ? 0.0
-        : m.businessesOnline / m.activeBusinesses;
+  /// Con señal de uso en los últimos 15 minutos.
+  final int businessesOnline;
 
-    // KPIs primarios — los 4 más importantes, en grilla 2×2 (mobile) o 4×1 (desktop).
-    final primaryCards = <Widget>[
-      Builder(
-        builder: (ctx) => MetricCard(
-          label: 'Negocios activos',
-          value: '${m.activeBusinesses}',
-          sublabel: '${m.businessesOnline} operando ahora',
-          icon: HugeIcons.strokeRoundedBuilding03,
-          featured: true,
-          progress: activeRatio,
-          onTap: () => showOperatingNowSheet(ctx, overview),
-        ),
-      ),
-      MetricCard(
-        label: 'Ingresos hoy',
-        value: formatRd(m.totalRevenueToday),
-        sublabel: '${formatInt(m.totalSalesToday)} transacciones',
-        icon: HugeIcons.strokeRoundedDollarCircle,
-        variant: MetricVariant.accent,
-      ),
-      MetricCard(
-        label: 'NCF emitidos',
-        value: formatInt(m.totalNcfToday),
-        sublabel: m.ncfCritical + m.ncfWarning > 0
-            ? '${m.ncfCritical + m.ncfWarning} con stock bajo'
-            : 'Stock saludable',
-        icon: HugeIcons.strokeRoundedInvoice03,
-        variant: m.ncfCritical > 0
-            ? MetricVariant.destructive
-            : MetricVariant.success,
-      ),
-      Builder(
-        builder: (ctx) => MetricCard(
-          label: 'En operación ahora',
-          value: '${m.businessesOnline}/${m.activeBusinesses}',
-          sublabel: m.businessesActiveToday > m.businessesOnline
-              ? '${m.businessesActiveToday} con uso hoy'
-              : 'Última hora',
-          icon: HugeIcons.strokeRoundedWifi01,
-          variant: m.businessesOnline == 0
-              ? MetricVariant.warning
-              : MetricVariant.success,
-          progress: activeRatio,
-          onTap: () => showOperatingNowSheet(ctx, overview),
-        ),
-      ),
-    ];
+  /// Con el agente sin reportar (caído o nunca instalado).
+  final int agentsDown;
 
-    // KPIs secundarios — versión compacta.
-    final secondaryCards = <Widget>[
-      MetricCard(
-        compact: true,
-        label: 'Fallas impresión 24h',
-        value: formatInt(m.printFailures24h),
-        sublabel: 'Acumulado',
-        icon: HugeIcons.strokeRoundedPrinter,
-        variant: m.printFailures24h > 30
-            ? MetricVariant.destructive
-            : MetricVariant.neutral,
-      ),
-      MetricCard(
-        compact: true,
-        label: 'Membresías por vencer',
-        value: '${m.expiringSoon}',
-        sublabel: 'Próx. 7 días',
-        icon: HugeIcons.strokeRoundedAlert02,
-        variant: m.expiringSoon > 0
-            ? MetricVariant.warning
-            : MetricVariant.neutral,
-      ),
-      MetricCard(
-        compact: true,
-        label: 'Ticket promedio',
-        value: formatRd(
-          m.totalSalesToday > 0 ? m.totalRevenueToday / m.totalSalesToday : 0,
-        ),
-        sublabel: 'Plataforma',
-        icon: HugeIcons.strokeRoundedShoppingCart01,
-      ),
-      MetricCard(
-        compact: true,
-        label: 'Sesiones abiertas',
-        value: formatInt(m.openSessions),
-        sublabel: '${formatInt(m.openTables)} mesas',
-        icon: HugeIcons.strokeRoundedDashboardCircle,
-        variant: MetricVariant.primary,
-      ),
-    ];
+  final double totalRevenueToday;
+  final int totalSalesToday;
+  final int totalNcfToday;
+  final int ncfCritical;
 
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final w = constraints.maxWidth;
-        final int cols;
-        final double primaryRatio;
-        final double secondaryRatio;
-        if (w >= 1100) {
-          cols = 4;
-          primaryRatio = 1.45;
-          secondaryRatio = 2.0;
-        } else if (w >= 640) {
-          cols = 2;
-          primaryRatio = 1.25;
-          secondaryRatio = 1.85;
-        } else {
-          cols = 1;
-          primaryRatio = 2.6;
-          secondaryRatio = 3.6;
-        }
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            GridView.count(
-              crossAxisCount: cols,
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              crossAxisSpacing: 14,
-              mainAxisSpacing: 14,
-              childAspectRatio: primaryRatio,
-              children: primaryCards,
-            ),
-            const SizedBox(height: 14),
-            GridView.count(
-              crossAxisCount: cols,
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              crossAxisSpacing: 12,
-              mainAxisSpacing: 12,
-              childAspectRatio: secondaryRatio,
-              children: secondaryCards,
-            ),
-          ],
-        );
-      },
-    );
-  }
+  /// Secuencias en advertencia o crítica — las dos frenan la facturación.
+  final int ncfLow;
 
-  _AggregatedMetrics _aggregate(List<BusinessOverview> rows) {
-    final actives = rows.where((b) => b.isActive).toList();
-    return _AggregatedMetrics(
+  final int printFailures24h;
+  final int businessesWithFailures;
+
+  factory _PlatformMetrics.from(List<BusinessOverview> rows) {
+    final actives = rows.where((b) => b.isActive).toList(growable: false);
+    return _PlatformMetrics(
       activeBusinesses: actives.length,
-      agentsOnline: actives
-          .where((b) => b.agentStatus == AgentStatus.online)
+      businessesOnline: actives
+          .where((b) => b.activityStatus == ActivityStatus.online)
           .length,
-      agentsOffline: actives
+      agentsDown: actives
           .where(
             (b) =>
                 b.agentStatus == AgentStatus.offline ||
@@ -420,63 +540,11 @@ class _MetricsGrid extends StatelessWidget {
       ncfCritical: actives
           .where((b) => b.ncfStatus == NcfStatus.critical)
           .length,
-      ncfWarning: actives.where((b) => b.ncfStatus == NcfStatus.warning).length,
+      ncfLow: actives.where((b) => b.ncfStatus != NcfStatus.ok).length,
       printFailures24h: actives.fold<int>(0, (s, b) => s + b.printFailures24h),
-      openSessions: actives.fold<int>(0, (s, b) => s + b.openSessions),
-      openTables: actives.fold<int>(0, (s, b) => s + b.openTables),
-      expiringSoon: actives.where((b) {
-        final d = b.planEndDate;
-        if (d == null) return false;
-        final days = d.difference(DateTime.now()).inDays;
-        return days <= 7;
-      }).length,
-      businessesOnline: actives
-          .where((b) => b.activityStatus == ActivityStatus.online)
-          .length,
-      businessesActiveToday: actives
-          .where((b) =>
-              b.activityStatus == ActivityStatus.online ||
-              b.activityStatus == ActivityStatus.late ||
-              b.activityStatus == ActivityStatus.recent)
+      businessesWithFailures: actives
+          .where((b) => b.printFailures24h > 0)
           .length,
     );
   }
-}
-
-class _AggregatedMetrics {
-  const _AggregatedMetrics({
-    required this.activeBusinesses,
-    required this.agentsOnline,
-    required this.agentsOffline,
-    required this.totalRevenueToday,
-    required this.totalSalesToday,
-    required this.totalNcfToday,
-    required this.ncfCritical,
-    required this.ncfWarning,
-    required this.printFailures24h,
-    required this.openSessions,
-    required this.openTables,
-    required this.expiringSoon,
-    required this.businessesOnline,
-    required this.businessesActiveToday,
-  });
-
-  final int activeBusinesses;
-  final int agentsOnline;
-  final int agentsOffline;
-  final double totalRevenueToday;
-  final int totalSalesToday;
-  final int totalNcfToday;
-  final int ncfCritical;
-  final int ncfWarning;
-  final int printFailures24h;
-  final int openSessions;
-  final int openTables;
-  final int expiringSoon;
-
-  /// Negocios con actividad en los últimos 15 minutos.
-  final int businessesOnline;
-
-  /// Negocios con actividad hoy (online + tardío + reciente <24h).
-  final int businessesActiveToday;
 }

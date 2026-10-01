@@ -38,9 +38,21 @@ class PickedImage {
 /// `maxBytes` valida el tamaño antes de leer; null = sin límite.
 Future<PickedImage?> pickImageFromWeb({
   int? maxBytes,
+}) {
+  return pickFileFromWeb(
+    accept: 'image/png,image/jpeg,image/jpg,image/webp,image/svg+xml',
+    maxBytes: maxBytes,
+  );
+}
+
+/// Igual que [pickImageFromWeb] pero para cualquier tipo: [accept] es el
+/// atributo del `<input type=file>` (ej. `.p12,.pfx`).
+Future<PickedImage?> pickFileFromWeb({
+  required String accept,
+  int? maxBytes,
 }) async {
   final input = html.FileUploadInputElement()
-    ..accept = 'image/png,image/jpeg,image/jpg,image/webp,image/svg+xml'
+    ..accept = accept
     ..multiple = false;
 
   final completer = Completer<PickedImage?>();

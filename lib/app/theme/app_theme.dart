@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import 'app_colors.dart';
+import 'page_transitions.dart';
 
 /// Construye el ThemeData de la consola, replicando el sistema visual
 /// del prototipo `mango-overview-desk` (verde MangoPOS + naranja acento,
@@ -65,6 +66,7 @@ class AppTheme {
       dividerColor: AppColors.border,
       textTheme: textTheme,
       visualDensity: VisualDensity.standard,
+      pageTransitionsTheme: ConsolePageTransitionsBuilder.theme,
       cardTheme: CardThemeData(
         color: AppColors.card,
         elevation: 0,

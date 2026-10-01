@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../app/theme/app_colors.dart';
@@ -13,34 +15,48 @@ import 'topbar.dart';
 ///
 /// Nota: el contenido se centra a un `maxWidth` de 1600px para no estirarse
 /// en monitores anchos (replica el `max-w-[1600px]` del prototipo).
-class AppShell extends StatelessWidget {
+class AppShell extends ConsumerWidget {
   const AppShell({super.key, required this.child});
 
   final Widget child;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final currentPath = GoRouterState.of(context).matchedLocation;
     final isDesktop = Breakpoints.isDesktop(context);
 
     if (isDesktop) {
-      return Scaffold(
-        backgroundColor: AppColors.background,
-        body: SafeArea(
-          // En desktop el SafeArea solo importa para MacBooks con notch (Studio Display, etc).
-          bottom: false,
-          child: Row(
-            children: [
-              Sidebar(currentPath: currentPath),
-              Expanded(
-                child: Column(
-                  children: [
-                    Topbar(),
-                    Expanded(child: child),
-                  ],
-                ),
+      // ⌘K / Ctrl+K enfoca el buscador global. Va acá y no en el topbar
+      // porque un atajo solo dispara si el foco está dentro del subárbol que
+      // lo registra — y el foco casi siempre está en el contenido.
+      return CallbackShortcuts(
+        bindings: {
+          const SingleActivator(LogicalKeyboardKey.keyK, meta: true): () =>
+              ref.read(topbarSearchFocusProvider).requestFocus(),
+          const SingleActivator(LogicalKeyboardKey.keyK, control: true): () =>
+              ref.read(topbarSearchFocusProvider).requestFocus(),
+        },
+        child: Focus(
+          autofocus: true,
+          child: Scaffold(
+            backgroundColor: AppColors.background,
+            body: SafeArea(
+              // En desktop el SafeArea solo importa para MacBooks con notch (Studio Display, etc).
+              bottom: false,
+              child: Row(
+                children: [
+                  Sidebar(currentPath: currentPath),
+                  Expanded(
+                    child: Column(
+                      children: [
+                        const Topbar(),
+                        Expanded(child: child),
+                      ],
+                    ),
+                  ),
+                ],
               ),
-            ],
+            ),
           ),
         ),
       );
