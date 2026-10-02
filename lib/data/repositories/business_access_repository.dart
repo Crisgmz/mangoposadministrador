@@ -25,6 +25,12 @@ class BusinessAccessRepository {
   }
 
   /// Corta el acceso al POS de inmediato. Limpia cualquier prórroga vigente.
+  ///
+  /// Manda `enforcement: 'on'` para ESTE negocio: el motor de acceso calcula el
+  /// estado (`locked`) y aparte decide si se aplica (`enforced`), y eso último
+  /// depende de un interruptor global que sigue apagado desde el piloto del
+  /// cobro. Sin esto, el bloqueo quedaba registrado pero el POS no bloqueaba
+  /// nada. Un bloqueo manual tiene que valer por sí mismo.
   Future<BusinessAccess?> lock({
     required String businessId,
     required String reason,
@@ -39,6 +45,7 @@ class BusinessAccessRepository {
       customerMessage: customerMessage,
       contactName: contactName,
       contactPhone: contactPhone,
+      enforcement: 'on',
     );
   }
 
@@ -51,7 +58,13 @@ class BusinessAccessRepository {
     required String businessId,
     required String reason,
   }) {
-    return _set(businessId: businessId, action: 'unlock', reason: reason);
+    // Vuelve a 'inherit': el negocio queda bajo la regla global, no forzado.
+    return _set(
+      businessId: businessId,
+      action: 'unlock',
+      reason: reason,
+      enforcement: 'inherit',
+    );
   }
 
   /// Programa el corte para una fecha futura. El POS muestra la regresiva.

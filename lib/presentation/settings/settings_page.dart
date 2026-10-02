@@ -4,6 +4,7 @@ import 'package:hugeicons/hugeicons.dart';
 import 'package:flutter/services.dart';
 import '../../core/format/formatters.dart';
 import '../../data/repositories/ecf_quota_repository.dart';
+import 'access_policy_card.dart';
 
 import '../../app/theme/app_colors.dart';
 import '../../core/io/web_file_picker.dart';
@@ -53,6 +54,8 @@ class SettingsPage extends ConsumerWidget {
               _CompanyForm(settings: settings),
               const SizedBox(height: 24),
               _EcfPriceCard(priceCents: settings.ecfOveragePriceCents),
+              const SizedBox(height: 24),
+              const AccessPolicyCard(),
             ],
           ),
         ),

@@ -151,9 +151,17 @@ class _AccessCard extends ConsumerWidget {
             ],
           ),
 
+          // En rojo si el negocio figura bloqueado pero el POS no lo aplica:
+          // es exactamente el caso en que alguien cree haber cortado el acceso
+          // y el cliente sigue facturando.
           if (access.notEnforcedNote != null) ...[
             const SizedBox(height: 12),
-            _Note(color: AppColors.mutedForeground, text: access.notEnforcedNote!),
+            _Note(
+              color: access.state == 'locked'
+                  ? AppColors.destructive
+                  : AppColors.mutedForeground,
+              text: access.notEnforcedNote!,
+            ),
           ],
 
           const SizedBox(height: 14),
