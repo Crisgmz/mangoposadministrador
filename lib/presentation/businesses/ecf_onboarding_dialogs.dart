@@ -951,75 +951,63 @@ class EcfSignedDocumentDialog extends StatelessWidget {
   }
 }
 
-/// Producto representativo del negocio para el set de pruebas.
-class EcfItemExampleDialog extends StatefulWidget {
-  const EcfItemExampleDialog({this.initial, this.retrying = false, super.key});
+/// Certificado .p12 del contribuyente para firmar el set de pruebas. Viaja en
+/// la petición y el servidor no lo guarda.
+class EcfSigningCertificateDialog extends StatefulWidget {
+  const EcfSigningCertificateDialog({
+    required this.title,
+    required this.intro,
+    required this.confirmLabel,
+    super.key,
+  });
 
-  final EcfItemExample? initial;
-
-  /// El set anterior fue rechazado: se genera otro con nuevo reintento.
-  final bool retrying;
+  final String title;
+  final String intro;
+  final String confirmLabel;
 
   @override
-  State<EcfItemExampleDialog> createState() => _EcfItemExampleDialogState();
+  State<EcfSigningCertificateDialog> createState() =>
+      _EcfSigningCertificateDialogState();
 }
 
-class _EcfItemExampleDialogState extends State<EcfItemExampleDialog> {
-  late final _name = TextEditingController(text: widget.initial?.itemName ?? '');
-  late final _price = TextEditingController(
-    text: widget.initial == null ? '' : '${widget.initial!.unitPrice}',
-  );
-  late final _description =
-      TextEditingController(text: widget.initial?.description ?? '');
-  late int _billing = widget.initial?.billingIndicator ?? 1;
-  late int _goodService = widget.initial?.goodServiceIndicator ?? 1;
+class _EcfSigningCertificateDialogState extends State<EcfSigningCertificateDialog> {
+  final _password = TextEditingController();
+  PickedImage? _file;
+  bool _obscure = true;
   String? _error;
-
-  static const _billingLabels = {
-    1: 'Gravado ITBIS 18%',
-    2: 'Gravado ITBIS 16%',
-    3: 'Gravado ITBIS 0%',
-    4: 'Exento',
-  };
 
   @override
   void dispose() {
-    _name.dispose();
-    _price.dispose();
-    _description.dispose();
+    _password.dispose();
     super.dispose();
   }
 
-  void _submit() {
-    final name = _name.text.trim();
-    final price = int.tryParse(_price.text.trim());
-    String? error;
-    if (name.isEmpty) {
-      error = 'Falta el nombre del producto.';
-    } else if (price == null || price < 1) {
-      error = 'El precio tiene que ser un entero mayor que 0.';
+  Future<void> _pick() async {
+    try {
+      final picked = await pickFileFromWeb(
+        accept: '.p12,.pfx,application/x-pkcs12',
+        maxBytes: 100 * 1024,
+      );
+      if (picked == null || !mounted) return;
+      final ext = picked.extension;
+      if (ext != 'p12' && ext != 'pfx') {
+        setState(() => _error = 'El certificado tiene que ser .p12 o .pfx.');
+        return;
+      }
+      setState(() {
+        _file = picked;
+        _error = null;
+      });
+    } catch (e) {
+      if (mounted) setState(() => _error = '$e');
     }
-    if (error != null) {
-      setState(() => _error = error);
-      return;
-    }
-    final description = _description.text.trim();
-    Navigator.pop(
-      context,
-      EcfItemExample(
-        itemName: name,
-        billingIndicator: _billing,
-        goodServiceIndicator: _goodService,
-        unitPrice: price!,
-        description: description.isEmpty ? null : description,
-      ),
-    );
   }
 
   @override
   Widget build(BuildContext context) {
+    final ready = _file != null && _password.text.isNotEmpty;
     return AlertDialog(
-      title: Text(widget.retrying ? 'Generar el set de pruebas de nuevo' : 'Generar set de pruebas'),
+      title: Text(widget.title),
       content: SizedBox(
         width: 480,
         child: SingleChildScrollView(
@@ -1027,52 +1015,34 @@ class _EcfItemExampleDialogState extends State<EcfItemExampleDialog> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const EcfNote(
-                color: AppColors.mutedForeground,
-                text: 'Alanube envía 20 comprobantes de prueba a la DGII con este '
-                    'producto. Solo funciona después de subir la postulación '
-                    'firmada a la OFV. Si alguno se rechaza, hay que generar el set '
-                    'otra vez.',
-              ),
+              EcfNote(color: AppColors.mutedForeground, text: widget.intro),
               const SizedBox(height: 14),
-              TextField(
-                controller: _name,
-                maxLength: 80,
-                decoration: const InputDecoration(labelText: 'Producto que vende el negocio'),
+              OutlinedButton.icon(
+                onPressed: _pick,
+                icon: const Icon(HugeIcons.strokeRoundedFileUpload, size: 15),
+                label: Text(_file == null ? 'Elegir certificado (.p12)' : _file!.filename),
               ),
+              const SizedBox(height: 10),
               TextField(
-                controller: _price,
-                keyboardType: TextInputType.number,
-                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                decoration: const InputDecoration(
-                  labelText: 'Precio unitario (entero, RD\$)',
+                controller: _password,
+                obscureText: _obscure,
+                onChanged: (_) => setState(() {}),
+                decoration: InputDecoration(
+                  labelText: 'Contraseña del certificado',
+                  suffixIcon: IconButton(
+                    tooltip: _obscure ? 'Mostrar' : 'Ocultar',
+                    onPressed: () => setState(() => _obscure = !_obscure),
+                    icon: Icon(
+                      _obscure ? HugeIcons.strokeRoundedView : HugeIcons.strokeRoundedViewOff,
+                      size: 16,
+                    ),
+                  ),
                 ),
               ),
-              const SizedBox(height: 10),
-              DropdownButtonFormField<int>(
-                initialValue: _billing,
-                decoration: const InputDecoration(labelText: 'Impuesto'),
-                items: [
-                  for (final e in _billingLabels.entries)
-                    DropdownMenuItem(value: e.key, child: Text(e.value)),
-                ],
-                onChanged: (v) => setState(() => _billing = v ?? _billing),
-              ),
-              const SizedBox(height: 10),
-              DropdownButtonFormField<int>(
-                initialValue: _goodService,
-                decoration: const InputDecoration(labelText: 'Tipo'),
-                items: const [
-                  DropdownMenuItem(value: 1, child: Text('Bien')),
-                  DropdownMenuItem(value: 2, child: Text('Servicio')),
-                ],
-                onChanged: (v) => setState(() => _goodService = v ?? _goodService),
-              ),
-              const SizedBox(height: 10),
-              TextField(
-                controller: _description,
-                maxLines: 2,
-                decoration: const InputDecoration(labelText: 'Descripción (opcional)'),
+              const SizedBox(height: 8),
+              const Text(
+                'El mismo certificado con que se firmó la postulación. MangoPOS no lo guarda.',
+                style: TextStyle(fontSize: 11.5, color: AppColors.mutedForeground),
               ),
               if (_error != null) ...[
                 const SizedBox(height: 10),
@@ -1087,7 +1057,150 @@ class _EcfItemExampleDialogState extends State<EcfItemExampleDialog> {
           onPressed: () => Navigator.pop(context),
           child: const Text('Cancelar'),
         ),
-        FilledButton(onPressed: _submit, child: const Text('Generar')),
+        FilledButton(
+          onPressed: !ready
+              ? null
+              : () => Navigator.pop(
+                    context,
+                    EcfCertificateInput(
+                      filename: _file!.filename,
+                      bytes: _file!.bytes,
+                      password: _password.text,
+                    ),
+                  ),
+          child: Text(widget.confirmLabel),
+        ),
+      ],
+    );
+  }
+}
+
+/// Nombre de cada tipo de e-CF del set de pruebas.
+const ecfTestTypeLabels = <String, String>{
+  '31': 'Crédito fiscal',
+  '32': 'Consumo',
+  '33': 'Nota de débito',
+  '34': 'Nota de crédito',
+  '41': 'Compras',
+  '43': 'Gastos menores',
+  '44': 'Regímenes especiales',
+  '45': 'Gubernamental',
+  '46': 'Exportaciones',
+  '47': 'Pagos al exterior',
+};
+
+/// Los comprobantes del set con lo que respondió la DGII.
+class EcfTestSetDialog extends StatelessWidget {
+  const EcfTestSetDialog({required this.testSet, required this.onDownload, super.key});
+
+  final EcfTestSet testSet;
+
+  /// Descarga el XML firmado de un caso (lo hace la sección: usa el repo).
+  final Future<void> Function(EcfTestCase c) onDownload;
+
+  Color _statusColor(EcfTestCase c) {
+    switch (c.status) {
+      case 'accepted':
+        return AppColors.primary;
+      case 'conditional':
+      case 'sent':
+        return AppColors.warning;
+      case 'rejected':
+      case 'error':
+        return AppColors.destructive;
+      default:
+        return AppColors.mutedForeground;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final money = NumberFormat('#,##0.00', 'en_US');
+    final summaries = testSet.cases.where((c) => c.isSummary).toList();
+    return AlertDialog(
+      title: Text(testSet.filename ?? 'Set de pruebas'),
+      content: SizedBox(
+        width: 640,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (summaries.isNotEmpty) ...[
+                EcfNote(
+                  color: AppColors.mutedForeground,
+                  text: 'Las facturas de consumo menores de RD\$250 mil '
+                      '(${summaries.map((c) => c.encf).join(', ')}) van a la DGII como '
+                      'resumen. Cuando el resumen quede aceptado, descarga su XML y '
+                      'súbelo en "Facturas de consumo < 250Mil" del portal de certificación.',
+                ),
+                const SizedBox(height: 12),
+              ],
+              for (final c in testSet.cases)
+                Container(
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  decoration: const BoxDecoration(
+                    border: Border(bottom: BorderSide(color: AppColors.border)),
+                  ),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              '${c.encf} · ${ecfTestTypeLabels[c.ecfType] ?? 'E${c.ecfType}'}'
+                              '${c.isSummary ? ' · resumen' : ''}',
+                              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              [
+                                if (c.total != null) 'RD\$${money.format(c.total)}',
+                                if (c.modifies != null) 'modifica ${c.modifies}',
+                                if (c.securityCode != null && c.isSummary) 'código ${c.securityCode}',
+                              ].join(' · '),
+                              style: const TextStyle(fontSize: 12, color: AppColors.mutedForeground),
+                            ),
+                            for (final m in c.messages)
+                              Padding(
+                                padding: const EdgeInsets.only(top: 3),
+                                child: SelectableText(
+                                  '${m.code != null ? '[${m.code}] ' : ''}${m.message}',
+                                  style: TextStyle(fontSize: 11.5, height: 1.3, color: _statusColor(c)),
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Text(
+                        c.statusLabel,
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          color: _statusColor(c),
+                        ),
+                      ),
+                      IconButton(
+                        tooltip: 'Descargar XML firmado',
+                        visualDensity: VisualDensity.compact,
+                        onPressed: c.hasXml ? () => onDownload(c) : null,
+                        icon: const Icon(HugeIcons.strokeRoundedDownload04, size: 15),
+                      ),
+                    ],
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        FilledButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cerrar'),
+        ),
       ],
     );
   }

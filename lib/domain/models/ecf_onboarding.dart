@@ -19,8 +19,7 @@ class EcfOnboardingStatus {
     this.settings,
     this.company,
     this.companyError,
-    this.setTest,
-    this.setTestError,
+    this.testSet,
   });
 
   final String businessId;
@@ -52,9 +51,9 @@ class EcfOnboardingStatus {
   /// Por qué no se pudo leer la empresa en Alanube, si falló.
   final String? companyError;
 
-  /// Set de pruebas vigente. Solo viene mientras la certificación está en curso.
-  final EcfSetTest? setTest;
-  final String? setTestError;
+  /// Set de pruebas de la DGII cargado. Solo viene mientras la certificación
+  /// está en curso.
+  final EcfTestSet? testSet;
 
   bool get isProduction => environment == 'production';
 
@@ -94,7 +93,7 @@ class EcfOnboardingStatus {
     final fiscal = _map(json['fiscal']);
     final settings = _map(json['alanube_settings']);
     final company = _map(json['company']);
-    final setTest = _map(json['set_test']);
+    final testSet = _map(json['test_set']);
     return EcfOnboardingStatus(
       businessId: (business['id'] as String?) ?? '',
       businessName: (business['business_name'] as String?) ?? '',
@@ -111,8 +110,7 @@ class EcfOnboardingStatus {
       settings: settings == null ? null : EcfAlanubeSettings.fromJson(settings),
       company: company == null ? null : EcfCompany.fromJson(company),
       companyError: json['company_error'] as String?,
-      setTest: setTest == null ? null : EcfSetTest.fromJson(setTest),
-      setTestError: json['set_test_error'] as String?,
+      testSet: testSet == null ? null : EcfTestSet.fromJson(testSet),
     );
   }
 }
@@ -129,8 +127,6 @@ class EcfTaxpayerDraft {
     this.alanubeCompanyId,
     this.companyLinkedVia,
     this.companyLinkedAt,
-    this.setTestId,
-    this.setTestCreatedAt,
     this.postulationSignedAt,
     this.declarationSignedAt,
     this.rolesSignedAt,
@@ -156,8 +152,6 @@ class EcfTaxpayerDraft {
 
   // Certificación: cuándo se hizo cada paso DESDE EL PANEL. Firmar no es
   // subir a la OFV; la verdad la tiene la DGII.
-  final String? setTestId;
-  final DateTime? setTestCreatedAt;
   final DateTime? postulationSignedAt;
   final DateTime? declarationSignedAt;
   final DateTime? rolesSignedAt;
@@ -189,8 +183,6 @@ class EcfTaxpayerDraft {
       alanubeCompanyId: json['alanube_company_id'] as String?,
       companyLinkedVia: json['company_linked_via'] as String?,
       companyLinkedAt: _date(json['company_linked_at']),
-      setTestId: json['set_test_id'] as String?,
-      setTestCreatedAt: _date(json['set_test_created_at']),
       postulationSignedAt: _date(json['postulation_signed_at']),
       declarationSignedAt: _date(json['declaration_signed_at']),
       rolesSignedAt: _date(json['roles_signed_at']),
@@ -524,126 +516,180 @@ enum EcfSignKind {
   final String label;
 }
 
-/// Set de pruebas de certificación (20 comprobantes que Alanube manda a la DGII).
-class EcfSetTest {
-  const EcfSetTest({
-    required this.status,
-    required this.documents,
-    this.id,
-    this.retryNumber,
-    this.processed,
-    this.documentsZipUrl,
-    this.resumesZipUrl,
+/// Set de pruebas de la DGII: el Excel que entrega su portal de certificación,
+/// ya cargado. `ecf-onboarding` firma cada caso con el certificado del cliente
+/// y lo manda al ambiente CerteCF.
+class EcfTestSet {
+  const EcfTestSet({
+    required this.cases,
+    this.filename,
+    this.loadedAt,
+    this.sessionExpiresAt,
   });
 
-  final String? id;
+  final String? filename;
+  final DateTime? loadedAt;
 
-  /// `REGISTERED | IN_PROGRESS | ACCEPTED | REJECTED` (u otro que invente Alanube).
+  /// Mientras no venza, consultar a la DGII no pide el certificado.
+  final DateTime? sessionExpiresAt;
+  final List<EcfTestCase> cases;
+
+  int count(bool Function(EcfTestCase c) test) => cases.where(test).length;
+
+  int get accepted => count((c) => c.isAccepted);
+  int get inProcess => count((c) => c.status == 'sent');
+  int get toSend => count((c) => c.status == 'pending' || c.status == 'error');
+  int get summaries => count((c) => c.isSummary);
+
+  List<EcfTestCase> get rejected =>
+      cases.where((c) => c.status == 'rejected').toList(growable: false);
+  List<EcfTestCase> get failed =>
+      cases.where((c) => c.status == 'error').toList(growable: false);
+
+  bool get isEmpty => cases.isEmpty;
+
+  /// La DGII aceptó todo (con o sin observaciones).
+  bool get isComplete => cases.isNotEmpty && cases.every((c) => c.isAccepted);
+
+  /// Un rechazo obliga a reiniciar el set en el portal de la DGII.
+  bool get canSend => toSend > 0 && rejected.isEmpty;
+  bool get canCheck => inProcess > 0;
+
+  factory EcfTestSet.fromJson(Map<String, dynamic> json) {
+    return EcfTestSet(
+      filename: json['filename'] as String?,
+      loadedAt: _date(json['loaded_at']),
+      sessionExpiresAt: _date(json['session_expires_at']),
+      cases: ((json['cases'] as List?) ?? const [])
+          .whereType<Map>()
+          .map((e) => EcfTestCase.fromJson(Map<String, dynamic>.from(e)))
+          .toList(growable: false),
+    );
+  }
+}
+
+/// Un comprobante del set (una fila de la hoja ECF).
+class EcfTestCase {
+  const EcfTestCase({
+    required this.id,
+    required this.position,
+    required this.ecfType,
+    required this.encf,
+    required this.via,
+    required this.status,
+    required this.messages,
+    this.total,
+    this.modifies,
+    this.trackId,
+    this.securityCode,
+    this.sentAt,
+  });
+
+  final String id;
+  final int position;
+
+  /// `31`, `32`… sin la E.
+  final String ecfType;
+  final String encf;
+  final double? total;
+
+  /// `ecf` → Recepción. `rfce` → E32 menor de 250 mil: va su resumen y el XML
+  /// completo se sube a mano en el portal de la DGII.
+  final String via;
+
+  /// `pending | sent | accepted | conditional | rejected | error`.
   final String status;
-  final int? retryNumber;
-  final int? processed;
-  final List<EcfSetTestDocument> documents;
+  final String? modifies;
+  final String? trackId;
+  final String? securityCode;
+  final List<EcfDgiiMessage> messages;
+  final DateTime? sentAt;
 
-  /// Zips con los XML y PDF que se suben a la OFV. Solo al aceptarse.
-  final String? documentsZipUrl;
-  final String? resumesZipUrl;
+  bool get isSummary => via == 'rfce';
+  bool get isAccepted => status == 'accepted' || status == 'conditional';
 
-  static const total = 20;
-
-  bool get isAccepted => status == 'ACCEPTED';
-  bool get isRejected => status == 'REJECTED';
-  bool get isFinal => isAccepted || isRejected;
-
-  List<EcfSetTestDocument> get rejectedDocuments =>
-      documents.where((d) => d.status == 'REJECTED').toList(growable: false);
+  /// Ya se firmó: hay XML para descargar.
+  bool get hasXml =>
+      status == 'sent' || isAccepted || status == 'rejected';
 
   String get statusLabel {
     switch (status) {
-      case 'ACCEPTED':
+      case 'pending':
+        return 'Pendiente';
+      case 'sent':
+        return 'En proceso';
+      case 'accepted':
         return 'Aceptado';
-      case 'REJECTED':
+      case 'conditional':
+        return 'Aceptado condicional';
+      case 'rejected':
         return 'Rechazado';
-      case 'REGISTERED':
-        return 'Registrado';
-      case 'IN_PROGRESS':
-        return 'En curso';
+      case 'error':
+        return 'No se pudo enviar';
       default:
         return status;
     }
   }
 
-  factory EcfSetTest.fromJson(Map<String, dynamic> json) {
-    return EcfSetTest(
-      id: json['id'] as String?,
-      status: (json['status'] as String?) ?? 'DESCONOCIDO',
-      retryNumber: (json['retry_number'] as num?)?.toInt(),
-      processed: (json['processed'] as num?)?.toInt(),
-      documents: ((json['documents'] as List?) ?? const [])
+  factory EcfTestCase.fromJson(Map<String, dynamic> json) {
+    return EcfTestCase(
+      id: json['id'] as String,
+      position: (json['position'] as num?)?.toInt() ?? 0,
+      ecfType: (json['ecf_type'] as String?) ?? '',
+      encf: (json['encf'] as String?) ?? '',
+      total: (json['total'] as num?)?.toDouble(),
+      via: (json['via'] as String?) ?? 'ecf',
+      status: (json['status'] as String?) ?? 'pending',
+      modifies: json['modifies'] as String?,
+      trackId: json['track_id'] as String?,
+      securityCode: json['security_code'] as String?,
+      messages: ((json['messages'] as List?) ?? const [])
           .whereType<Map>()
-          .map((e) => EcfSetTestDocument.fromJson(Map<String, dynamic>.from(e)))
+          .map((e) => EcfDgiiMessage.fromJson(Map<String, dynamic>.from(e)))
           .toList(growable: false),
-      documentsZipUrl: json['documents_zip_url'] as String?,
-      resumesZipUrl: json['resumes_zip_url'] as String?,
+      sentAt: _date(json['sent_at']),
     );
   }
 }
 
-class EcfSetTestDocument {
-  const EcfSetTestDocument({required this.type, required this.status, this.encf});
+class EcfDgiiMessage {
+  const EcfDgiiMessage({required this.message, this.code});
 
-  final String type;
-  final String status;
-  final String? encf;
+  final String? code;
+  final String message;
 
-  factory EcfSetTestDocument.fromJson(Map<String, dynamic> json) {
-    return EcfSetTestDocument(
-      type: (json['type'] as String?) ?? '',
-      status: (json['status'] as String?) ?? '',
-      encf: json['encf'] as String?,
+  factory EcfDgiiMessage.fromJson(Map<String, dynamic> json) {
+    return EcfDgiiMessage(
+      code: json['code']?.toString(),
+      message: (json['message'] as String?) ?? '',
     );
   }
 }
 
-/// Producto representativo con que Alanube arma los comprobantes del set.
-class EcfItemExample {
-  const EcfItemExample({
-    required this.itemName,
-    required this.billingIndicator,
-    required this.goodServiceIndicator,
-    required this.unitPrice,
-    this.description,
+/// Respuesta de un lote de `send_test_set`.
+class EcfTestSetSendResult {
+  const EcfTestSetSendResult({
+    required this.sent,
+    required this.more,
+    required this.testSet,
+    this.stoppedReason,
   });
 
-  final String itemName;
+  final int sent;
 
-  /// 1 = ITBIS 18%, 2 = 16%, 3 = 0%, 4 = exento.
-  final int billingIndicator;
+  /// Quedó trabajo: el panel vuelve a llamar con el mismo certificado.
+  final bool more;
+  final String? stoppedReason;
+  final EcfTestSet testSet;
 
-  /// 1 = bien, 2 = servicio.
-  final int goodServiceIndicator;
-
-  /// Entero: Alanube no acepta decimales aquí.
-  final int unitPrice;
-  final String? description;
-
-  factory EcfItemExample.fromJson(Map<String, dynamic> json) {
-    return EcfItemExample(
-      itemName: (json['item_name'] as String?) ?? '',
-      billingIndicator: (json['billing_indicator'] as num?)?.toInt() ?? 1,
-      goodServiceIndicator: (json['good_service_indicator'] as num?)?.toInt() ?? 1,
-      unitPrice: (json['unit_price'] as num?)?.toInt() ?? 1,
-      description: json['item_description'] as String?,
+  factory EcfTestSetSendResult.fromJson(Map<String, dynamic> json) {
+    return EcfTestSetSendResult(
+      sent: (json['sent'] as num?)?.toInt() ?? 0,
+      more: (json['more'] as bool?) ?? false,
+      stoppedReason: json['stopped_reason'] as String?,
+      testSet: EcfTestSet.fromJson(_map(json['test_set']) ?? const {}),
     );
   }
-
-  Map<String, dynamic> toJson() => {
-        'item_name': itemName,
-        'billing_indicator': billingIndicator,
-        'good_service_indicator': goodServiceIndicator,
-        'unit_price': unitPrice,
-        if (description != null && description!.trim().isNotEmpty)
-          'item_description': description,
-      };
 }
 
 /// Lo que se copia en el formulario de postulación de la OFV.
@@ -659,7 +705,6 @@ class EcfPostulationInfo {
     this.approvalUrl,
     this.authenticationUrl,
     this.companyError,
-    this.itemSuggestion,
   });
 
   final String? softwareType;
@@ -672,12 +717,10 @@ class EcfPostulationInfo {
   final String? approvalUrl;
   final String? authenticationUrl;
   final String? companyError;
-  final EcfItemExample? itemSuggestion;
 
   factory EcfPostulationInfo.fromJson(Map<String, dynamic> json) {
     final provider = _map(json['provider']) ?? const {};
     final urls = _map(json['company_urls']);
-    final suggestion = _map(json['item_suggestion']);
     return EcfPostulationInfo(
       softwareType: provider['software_type'] as String?,
       softwareName: provider['software_name'] as String?,
@@ -689,8 +732,6 @@ class EcfPostulationInfo {
       approvalUrl: urls?['approval'] as String?,
       authenticationUrl: urls?['authentication'] as String?,
       companyError: json['company_error'] as String?,
-      itemSuggestion:
-          suggestion == null ? null : EcfItemExample.fromJson(suggestion),
     );
   }
 }

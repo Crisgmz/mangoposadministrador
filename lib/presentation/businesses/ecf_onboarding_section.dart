@@ -20,7 +20,9 @@ import 'ecf_onboarding_dialogs.dart';
 ///
 /// Para clientes que todavía no son emisores electrónicos, el paso de
 /// certificación guía la postulación en la OFV: firma de los XML de la DGII y
-/// set de pruebas. Subir los archivos a la OFV sigue siendo manual.
+/// el set de pruebas que entrega la DGII (un Excel que se carga aquí, se firma
+/// con el certificado del cliente y se manda a su ambiente de certificación).
+/// Bajar y subir archivos en el portal de la DGII sigue siendo manual.
 class EcfOnboardingSection extends ConsumerStatefulWidget {
   const EcfOnboardingSection({required this.businessId, super.key});
 
@@ -351,21 +353,174 @@ class _EcfOnboardingSectionState extends ConsumerState<EcfOnboardingSection> {
     );
   }
 
-  Future<void> _createSetTest(EcfOnboardingStatus s) async {
-    final info = await _loadPostulationInfo();
-    if (!mounted) return;
-    final item = await showDialog<EcfItemExample>(
-      context: context,
-      builder: (_) => EcfItemExampleDialog(
-        initial: info?.itemSuggestion,
-        retrying: s.setTest?.isRejected ?? false,
+  /// Lotes de `send_test_set` antes de rendirse (cada uno trabaja ~30 s).
+  static const _maxSendBatches = 12;
+
+  Future<void> _importTestSet(EcfOnboardingStatus s) async {
+    final current = s.testSet;
+    if (current != null && current.cases.any((c) => c.status != 'pending')) {
+      final ok = await _confirm(
+        title: 'Cargar otro set de pruebas',
+        body: 'Se reemplazan los ${current.cases.length} comprobantes cargados y lo que '
+            'respondió la DGII. Hazlo si reiniciaste el set en el portal de la DGII y '
+            'descargaste el archivo nuevo.',
+        confirmLabel: 'Reemplazar',
+        color: AppColors.destructive,
+      );
+      if (!ok) return;
+    }
+    final PickedImage? file;
+    try {
+      file = await pickFileFromWeb(
+        accept: '.xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv',
+        maxBytes: 5 * 1024 * 1024,
+      );
+    } catch (e) {
+      if (mounted) await _showError(e);
+      return;
+    }
+    if (file == null || !mounted) return;
+    if (file.extension != 'xlsx' && file.extension != 'csv') {
+      await _showError('Tiene que ser el .xlsx que da la DGII o un .csv de su hoja ECF.');
+      return;
+    }
+    EcfTestSet? loaded;
+    final ok = await _run(
+      'Leyendo el set de pruebas…',
+      () async => loaded = await _repo.importTestSet(
+        businessId: widget.businessId,
+        filename: file!.filename,
+        bytes: file.bytes,
       ),
     );
-    if (item == null) return;
+    if (!ok || loaded == null || !mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text('Set cargado: ${loaded!.cases.length} comprobantes'
+          '${loaded!.summaries > 0 ? ' (${loaded!.summaries} de consumo van como resumen)' : ''}.'),
+    ));
+  }
+
+  Future<void> _sendTestSet(EcfTestSet t) async {
+    final cert = await showDialog<EcfCertificateInput>(
+      context: context,
+      builder: (_) => EcfSigningCertificateDialog(
+        title: 'Enviar el set a la DGII',
+        intro: 'Se firman ${t.toSend} comprobante(s) con el certificado del contribuyente '
+            'y se mandan al ambiente de certificación de la DGII, tal cual el archivo: '
+            'primero las facturas y al final las notas que las modifican. Puede tardar '
+            'unos minutos; no cierres esta página.',
+        confirmLabel: 'Firmar y enviar',
+      ),
+    );
+    if (cert == null || !mounted) return;
+
+    setState(() => _busy = 'Firmando y enviando a la DGII…');
+    String? notice;
+    var sent = 0;
+    var failed = false;
+    var renewedSession = false;
+    try {
+      for (var batch = 0; batch < _maxSendBatches; batch++) {
+        final EcfTestSetSendResult r;
+        try {
+          r = await _repo.sendTestSet(
+            businessId: widget.businessId,
+            certificateFilename: cert.filename,
+            certificateBytes: cert.bytes,
+            certificatePassword: cert.password,
+          );
+        } on EcfOnboardingException catch (e) {
+          // La DGII cerró la sesión guardada: el servidor ya la olvidó y el
+          // siguiente lote abre otra con el mismo certificado.
+          if (e.code == 'dgii_session_expired' && !renewedSession) {
+            renewedSession = true;
+            continue;
+          }
+          rethrow;
+        }
+        sent += r.sent;
+        final ts = r.testSet;
+        if (mounted) {
+          setState(() => _busy = 'Enviando a la DGII… ${ts.accepted} de ${ts.cases.length} aceptados'
+              '${ts.inProcess > 0 ? ', ${ts.inProcess} en proceso' : ''}');
+        }
+        notice = r.stoppedReason;
+        if (!r.more) break;
+        if (batch == _maxSendBatches - 1) {
+          notice = 'La DGII sigue procesando. Usa Consultar en un momento y, si quedan '
+              'comprobantes por enviar, Enviar otra vez.';
+        }
+      }
+    } catch (e) {
+      failed = true;
+      if (mounted) await _showError(e);
+    } finally {
+      if (mounted) setState(() => _busy = null);
+      _refresh();
+    }
+    if (failed || !mounted) return;
+    if (notice != null) {
+      await _showError(notice);
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Se mandaron $sent comprobante(s) a la DGII.')),
+      );
+    }
+  }
+
+  Future<void> _checkTestSet() async {
+    setState(() => _busy = 'Consultando a la DGII…');
+    try {
+      await _repo.checkTestSet(widget.businessId);
+      _refresh();
+      return;
+    } on EcfOnboardingException catch (e) {
+      if (e.code != 'dgii_session_expired') {
+        if (mounted) await _showError(e);
+        return;
+      }
+    } catch (e) {
+      if (mounted) await _showError(e);
+      return;
+    } finally {
+      if (mounted) setState(() => _busy = null);
+    }
+    if (!mounted) return;
+    // La sesión con la DGII (una hora) venció: se abre otra con el certificado.
+    final cert = await showDialog<EcfCertificateInput>(
+      context: context,
+      builder: (_) => const EcfSigningCertificateDialog(
+        title: 'Consultar a la DGII',
+        intro: 'La sesión con la DGII del último envío venció (dura una hora). Elige el '
+            'certificado del contribuyente para abrir otra y consultar.',
+        confirmLabel: 'Consultar',
+      ),
+    );
+    if (cert == null) return;
     await _run(
-      'Generando set de pruebas…',
-      () => _repo.createSetTest(widget.businessId, item),
-      success: 'Set de pruebas generado. Alanube lo está enviando a la DGII.',
+      'Consultando a la DGII…',
+      () => _repo.checkTestSet(
+        widget.businessId,
+        certificateFilename: cert.filename,
+        certificateBytes: cert.bytes,
+        certificatePassword: cert.password,
+      ),
+    );
+  }
+
+  Future<void> _downloadTestCase(EcfTestCase c) async {
+    try {
+      final file = await _repo.testCaseXml(widget.businessId, c.id);
+      downloadTextFileFromWeb(file.xml, file.filename, mimeType: 'application/xml');
+    } catch (e) {
+      if (mounted) await _showError(e);
+    }
+  }
+
+  Future<void> _showTestSet(EcfTestSet t) {
+    return showDialog<void>(
+      context: context,
+      builder: (_) => EcfTestSetDialog(testSet: t, onDownload: _downloadTestCase),
     );
   }
 
@@ -707,7 +862,7 @@ class _EcfOnboardingSectionState extends ConsumerState<EcfOnboardingSection> {
     String signedText(DateTime? at, String pending) =>
         at == null ? pending : 'Firmado el ${df.format(at.toLocal())}. Súbelo a la OFV si no lo has hecho.';
 
-    final t = s.setTest;
+    final t = s.testSet;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -736,42 +891,38 @@ class _EcfOnboardingSectionState extends ConsumerState<EcfOnboardingSection> {
           ),
         ),
         _SubStep(
-          label: 'Set de pruebas',
-          detail: t == null
-              ? (s.setTestError ??
-                  (draft?.setTestId != null
-                      ? 'Generado. Refresca para ver el avance.'
-                      : 'Después de subir la postulación firmada. Alanube envía 20 comprobantes de prueba.'))
-              : '${t.statusLabel} · ${t.processed ?? 0} de ${EcfSetTest.total} procesados'
-                  '${t.retryNumber != null ? ' · intento ${t.retryNumber}' : ''}'
-                  '${t.rejectedDocuments.isNotEmpty ? ' · rechazados: ${t.rejectedDocuments.map((d) => d.encf ?? d.type).join(', ')}' : ''}'
-                  '${t.isAccepted ? '. Descarga los XML y PDF y súbelos a la OFV.' : ''}',
-          detailColor: t?.isRejected == true || s.setTestError != null ? AppColors.destructive : null,
-          done: t?.isAccepted ?? false,
+          label: 'Set de pruebas de la DGII',
+          detail: _testSetDetail(t),
+          detailColor: t != null && (t.rejected.isNotEmpty || t.failed.isNotEmpty)
+              ? AppColors.destructive
+              : null,
+          done: t?.isComplete ?? false,
           action: Wrap(
             spacing: 6,
             runSpacing: 6,
+            alignment: WrapAlignment.end,
             children: [
-              if (t == null && draft?.setTestId == null || (t?.isRejected ?? false))
-                OutlinedButton(
-                  onPressed: locked ? null : () => _createSetTest(s),
-                  child: Text(t?.isRejected == true ? 'Generar de nuevo' : 'Generar'),
+              if (t != null && t.canSend)
+                FilledButton(
+                  onPressed: locked ? null : () => _sendTestSet(t),
+                  child: Text(
+                    t.cases.every((c) => c.status == 'pending') ? 'Enviar a la DGII' : 'Continuar envío',
+                  ),
                 ),
-              if (t != null && !t.isFinal || t == null && draft?.setTestId != null)
+              if (t != null && t.canCheck)
                 OutlinedButton(
-                  onPressed: locked ? null : _refresh,
+                  onPressed: locked ? null : _checkTestSet,
                   child: const Text('Consultar'),
                 ),
-              if (t?.documentsZipUrl != null)
+              if (t != null && !t.isEmpty)
                 OutlinedButton(
-                  onPressed: () => openEcfLink(context, t!.documentsZipUrl!),
-                  child: const Text('Documentos'),
+                  onPressed: () => _showTestSet(t),
+                  child: const Text('Ver comprobantes'),
                 ),
-              if (t?.resumesZipUrl != null)
-                OutlinedButton(
-                  onPressed: () => openEcfLink(context, t!.resumesZipUrl!),
-                  child: const Text('Resúmenes'),
-                ),
+              OutlinedButton(
+                onPressed: locked ? null : () => _importTestSet(s),
+                child: Text(t == null || t.isEmpty ? 'Cargar archivo' : 'Cargar otro'),
+              ),
             ],
           ),
         ),
@@ -807,6 +958,33 @@ class _EcfOnboardingSectionState extends ConsumerState<EcfOnboardingSection> {
         ),
       ],
     );
+  }
+
+  String _testSetDetail(EcfTestSet? t) {
+    if (t == null || t.isEmpty) {
+      return 'Después de subir la postulación firmada, la DGII da en su portal de '
+          'certificación (Pruebas de datos e-CF) un Excel con los comprobantes a probar. '
+          'Súbelo tal cual (.xlsx) o su hoja ECF en .csv.';
+    }
+    final text = StringBuffer([
+      '${t.cases.length} comprobantes'
+          '${t.summaries > 0 ? ' (${t.summaries} de consumo van como resumen)' : ''}',
+      '${t.accepted} aceptados',
+      if (t.inProcess > 0) '${t.inProcess} en proceso',
+      if (t.toSend > 0) '${t.toSend} por enviar',
+    ].join(' · '));
+    text.write('.');
+    if (t.rejected.isNotEmpty) {
+      text.write(' La DGII rechazó ${t.rejected.map((c) => c.encf).join(', ')}: reinicia el '
+          'set en su portal y carga el archivo nuevo.');
+    } else if (t.failed.isNotEmpty) {
+      text.write(' No se pudieron enviar ${t.failed.map((c) => c.encf).join(', ')} '
+          '(detalle en Ver comprobantes).');
+    } else if (t.isComplete && t.summaries > 0) {
+      text.write(' Falta subir en el portal los XML de las facturas de consumo menores '
+          'de 250 mil (Ver comprobantes → descargar).');
+    }
+    return text.toString();
   }
 
   Widget _sequencesStep(EcfOnboardingStatus s, bool locked) {

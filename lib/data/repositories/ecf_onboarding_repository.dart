@@ -139,18 +139,67 @@ class EcfOnboardingRepository {
     return url;
   }
 
-  Future<EcfSetTest?> createSetTest(String businessId, EcfItemExample item) async {
-    final data = await _onboarding('create_set_test', businessId, {
-      'item_example': item.toJson(),
+  /// Carga el Excel del set de pruebas que da la DGII (.xlsx, o la hoja ECF
+  /// en .csv). Reemplaza el que hubiera.
+  Future<EcfTestSet> importTestSet({
+    required String businessId,
+    required String filename,
+    required Uint8List bytes,
+  }) async {
+    final data = await _onboarding('import_test_set', businessId, {
+      'file': {'filename': filename, 'content_base64': base64Encode(bytes)},
     });
-    final t = data['set_test'];
-    return t is Map ? EcfSetTest.fromJson(Map<String, dynamic>.from(t)) : null;
+    return EcfTestSet.fromJson(_asMap(data['test_set']));
   }
 
-  Future<EcfSetTest?> checkSetTest(String businessId) async {
-    final data = await _onboarding('check_set_test', businessId);
-    final t = data['set_test'];
-    return t is Map ? EcfSetTest.fromJson(Map<String, dynamic>.from(t)) : null;
+  /// Un lote del envío a la DGII. El certificado viaja en cada lote y el
+  /// servidor no lo guarda; si responde `more`, hay que volver a llamar.
+  Future<EcfTestSetSendResult> sendTestSet({
+    required String businessId,
+    required String certificateFilename,
+    required Uint8List certificateBytes,
+    required String certificatePassword,
+  }) async {
+    final data = await _onboarding('send_test_set', businessId, {
+      'certificate': {
+        'filename': certificateFilename,
+        'content_base64': base64Encode(certificateBytes),
+        'password': certificatePassword,
+      },
+    });
+    return EcfTestSetSendResult.fromJson(data);
+  }
+
+  /// Consulta los envíos en proceso. Sin [certificate*] usa la sesión con la
+  /// DGII del último envío; si venció, falla con `dgii_session_expired`.
+  Future<EcfTestSet> checkTestSet(
+    String businessId, {
+    String? certificateFilename,
+    Uint8List? certificateBytes,
+    String? certificatePassword,
+  }) async {
+    final data = await _onboarding('check_test_set', businessId, {
+      if (certificateBytes != null)
+        'certificate': {
+          'filename': certificateFilename,
+          'content_base64': base64Encode(certificateBytes),
+          'password': certificatePassword,
+        },
+    });
+    return EcfTestSet.fromJson(_asMap(data['test_set']));
+  }
+
+  /// XML firmado de un caso, como se mandó a la DGII.
+  Future<({String filename, String xml})> testCaseXml(
+    String businessId,
+    String caseId,
+  ) async {
+    final data = await _onboarding('test_case_xml', businessId, {'case_id': caseId});
+    final xml = data['xml'];
+    if (xml is! String || xml.isEmpty) {
+      throw const EcfOnboardingException('El servidor no devolvió el XML.');
+    }
+    return (filename: (data['filename'] as String?) ?? '$caseId.xml', xml: xml);
   }
 
   Future<void> setDgiiAuthorized(String businessId, bool authorized) async {

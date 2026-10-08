@@ -42,3 +42,13 @@ Future<PickedImage?> pickFileFromWeb({
     'pickFileFromWeb solo está disponible en Flutter Web.',
   );
 }
+
+void downloadTextFileFromWeb(
+  String content,
+  String filename, {
+  String mimeType = 'text/plain',
+}) {
+  throw UnsupportedError(
+    'downloadTextFileFromWeb solo está disponible en Flutter Web.',
+  );
+}

@@ -188,51 +188,99 @@ void main() {
   });
 
   group('certificación', () {
-    test('set de pruebas rechazado lista los rechazados', () {
-      final t = EcfSetTest.fromJson({
-        'id': '01X',
-        'status': 'REJECTED',
-        'retry_number': 3,
-        'processed': 20,
-        'documents': [
-          {'type': 'creditNote', 'status': 'REJECTED', 'encf': 'E340000001820'},
-          {'type': 'invoice', 'status': 'ACCEPTED', 'encf': 'E320000001820'},
-        ],
-      });
-      expect(t.isRejected, isTrue);
-      expect(t.isFinal, isTrue);
-      expect(t.rejectedDocuments.single.encf, 'E340000001820');
-      expect(t.statusLabel, 'Rechazado');
-    });
+    Map<String, dynamic> testCase(
+      String encf,
+      String status, {
+      String via = 'ecf',
+      num? total,
+      String? modifies,
+      List<Map<String, dynamic>> messages = const [],
+    }) =>
+        {
+          'id': 'c-$encf',
+          'position': 1,
+          'case_id': '133051842$encf',
+          'ecf_type': encf.substring(1, 3),
+          'encf': encf,
+          'total': total,
+          'via': via,
+          'modifies': modifies,
+          'status': status,
+          'messages': messages,
+        };
 
-    test('set aceptado trae los zips', () {
+    EcfTestSet testSet(List<Map<String, dynamic>> cases) {
       final s = EcfOnboardingStatus.fromJson({
-        ..._status(onboarding: {..._data, 'alanube_company_id': '01M1', 'set_test_id': '01X'}),
-        'set_test': {
-          'id': '01X',
-          'status': 'ACCEPTED',
-          'processed': 20,
-          'documents_zip_url': 'https://s3/docs.zip',
-          'resumes_zip_url': 'https://s3/res.zip',
+        ..._status(onboarding: {..._data, 'alanube_company_id': '01M1'}),
+        'test_set': {
+          'filename': '133051842-08102026121048.xlsx',
+          'loaded_at': '2026-10-08T16:10:48Z',
+          'session_expires_at': '2026-10-08T17:10:48Z',
+          'cases': cases,
         },
       });
-      expect(s.setTest!.isAccepted, isTrue);
-      expect(s.setTest!.documentsZipUrl, 'https://s3/docs.zip');
-      expect(s.draft!.setTestId, '01X');
+      return s.testSet!;
+    }
+
+    test('set de pruebas de la DGII: cuenta estados y decide qué se puede hacer', () {
+      final t = testSet([
+        testCase('E310000000001', 'accepted', total: 1180),
+        testCase('E320000000011', 'conditional', via: 'rfce', total: 40120),
+        testCase('E320000000005', 'sent', total: 2282785.36),
+        testCase('E340000000001', 'pending', modifies: 'E310000000001'),
+        testCase('E330000000001', 'error', messages: [
+          {'code': '400', 'message': 'Monto invalido'},
+        ]),
+      ]);
+      expect(t.filename, '133051842-08102026121048.xlsx');
+      expect(t.sessionExpiresAt, isNotNull);
+      expect(t.accepted, 2);
+      expect(t.inProcess, 1);
+      expect(t.toSend, 2);
+      expect(t.summaries, 1);
+      expect(t.canSend, isTrue);
+      expect(t.canCheck, isTrue);
+      expect(t.isComplete, isFalse);
+      expect(t.failed.single.messages.single.message, 'Monto invalido');
+      expect(t.cases[1].isSummary, isTrue);
+      expect(t.cases[1].hasXml, isTrue);
+      expect(t.cases[3].hasXml, isFalse);
+      expect(t.cases[3].modifies, 'E310000000001');
+      expect(t.cases[2].total, 2282785.36);
     });
 
-    test('producto de ejemplo: la descripción vacía no viaja', () {
-      const item = EcfItemExample(
-        itemName: 'EXPRESSO DOBLE',
-        billingIndicator: 1,
-        goodServiceIndicator: 1,
-        unitPrice: 125,
-        description: '  ',
-      );
-      expect(item.toJson().containsKey('item_description'), isFalse);
+    test('un rechazo bloquea el envío hasta cargar otro set', () {
+      final t = testSet([
+        testCase('E310000000001', 'rejected'),
+        testCase('E340000000001', 'pending'),
+      ]);
+      expect(t.rejected.single.statusLabel, 'Rechazado');
+      expect(t.canSend, isFalse);
     });
 
-    test('datos de postulación con sugerencia', () {
+    test('todo aceptado (con o sin observaciones) completa el set', () {
+      final t = testSet([
+        testCase('E310000000001', 'accepted'),
+        testCase('E320000000011', 'conditional', via: 'rfce'),
+      ]);
+      expect(t.isComplete, isTrue);
+      expect(t.canSend, isFalse);
+      expect(t.canCheck, isFalse);
+    });
+
+    test('lote de envío: sigue mientras el servidor diga more', () {
+      final r = EcfTestSetSendResult.fromJson({
+        'sent': 3,
+        'more': true,
+        'stopped_reason': null,
+        'test_set': {'cases': []},
+      });
+      expect(r.sent, 3);
+      expect(r.more, isTrue);
+      expect(r.testSet.isEmpty, isTrue);
+    });
+
+    test('datos de postulación', () {
       final info = EcfPostulationInfo.fromJson({
         'provider': {
           'software_type': 'EXTERNO',
@@ -241,16 +289,9 @@ void main() {
           'provider_rnc': '132109122',
         },
         'company_urls': {'reception': 'https://r', 'approval': 'https://a', 'authentication': 'https://t'},
-        'item_suggestion': {
-          'item_name': 'EXPRESSO DOBLE',
-          'billing_indicator': 1,
-          'good_service_indicator': 1,
-          'unit_price': 125,
-        },
       });
       expect(info.providerRnc, '132109122');
       expect(info.authenticationUrl, 'https://t');
-      expect(info.itemSuggestion!.unitPrice, 125);
     });
   });
 

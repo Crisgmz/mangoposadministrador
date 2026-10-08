@@ -5,6 +5,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:hugeicons/hugeicons.dart';
 import 'package:intl/date_symbol_data_local.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -86,6 +87,41 @@ Future<_FakeRepo> _pump(
   await tester.pumpAndSettle();
   return repo;
 }
+
+const _certifying = {
+  'rnc': '133051842',
+  'legal_name': 'NUEVO CLIENTE SRL',
+  'fiscal_address': 'SANTIAGO',
+  'alanube_company_id': '01M1',
+};
+
+Map<String, dynamic> _case(
+  String encf,
+  String status, {
+  String via = 'ecf',
+  num? total,
+  String? modifies,
+  List<Map<String, dynamic>> messages = const [],
+}) =>
+    {
+      'id': 'c-$encf',
+      'position': 1,
+      'case_id': '133051842$encf',
+      'ecf_type': encf.substring(1, 3),
+      'encf': encf,
+      'total': total,
+      'via': via,
+      'modifies': modifies,
+      'status': status,
+      'messages': messages,
+    };
+
+Map<String, dynamic> _testSet(List<Map<String, dynamic>> cases) => {
+      'filename': '133051842-08102026121048.xlsx',
+      'loaded_at': '2026-10-08T16:10:48Z',
+      'session_expires_at': null,
+      'cases': cases,
+    };
 
 void main() {
   setUpAll(() => initializeDateFormatting('es', null));
@@ -209,69 +245,64 @@ void main() {
     expect(find.text('Activar'), findsNothing);
   });
 
-  testWidgets('certificación en curso: subpasos, set rechazado y botón de reintento', (tester) async {
+  testWidgets('certificación sin set: pide cargar el archivo de la DGII', (tester) async {
     await _pump(
       tester,
-      {
-        ..._json(
-          onboarding: {
-            'rnc': '133328828',
-            'legal_name': 'NUEVO CLIENTE SRL',
-            'fiscal_address': 'SANTIAGO',
-            'alanube_company_id': '01M1',
-            'postulation_signed_at': '2026-09-17T15:00:00Z',
-            'set_test_id': '01X',
-          },
-        ),
-        'set_test': {
-          'id': '01X',
-          'status': 'REJECTED',
-          'retry_number': 2,
-          'processed': 20,
-          'documents': [
-            {'type': 'creditNote', 'status': 'REJECTED', 'encf': 'E340000001820'},
-          ],
-        },
-      },
+      _json(onboarding: {..._certifying, 'postulation_signed_at': '2026-09-17T15:00:00Z'}),
     );
 
     expect(find.text('Certificación DGII'), findsOneWidget);
     expect(find.text('Firmar XML de postulación'), findsOneWidget);
     expect(find.textContaining('Firmado el'), findsOneWidget);
-    expect(find.textContaining('rechazados: E340000001820'), findsOneWidget);
-    expect(find.text('Generar de nuevo'), findsOneWidget);
-    expect(find.text('Consultar'), findsNothing);
+    expect(find.text('Set de pruebas de la DGII'), findsOneWidget);
+    expect(find.textContaining('Pruebas de datos e-CF'), findsOneWidget);
+    expect(find.text('Cargar archivo'), findsOneWidget);
+    expect(find.text('Enviar a la DGII'), findsNothing);
     expect(find.text('La DGII ya lo autorizó'), findsOneWidget);
     // Sin autorización, el paso de secuencias sigue disponible pero no es el actual.
     expect(find.text('Cargar secuencia'), findsOneWidget);
   });
 
-  testWidgets('set aceptado ofrece descargar documentos y resúmenes', (tester) async {
-    await _pump(
-      tester,
-      {
-        ..._json(
-          onboarding: {
-            'rnc': '133328828',
-            'legal_name': 'NUEVO CLIENTE SRL',
-            'fiscal_address': 'SANTIAGO',
-            'alanube_company_id': '01M1',
-            'set_test_id': '01X',
-          },
-        ),
-        'set_test': {
-          'id': '01X',
-          'status': 'ACCEPTED',
-          'processed': 20,
-          'documents_zip_url': 'https://s3/docs.zip',
-          'resumes_zip_url': 'https://s3/res.zip',
-        },
-      },
-    );
+  testWidgets('set cargado: enviar, consultar y ver comprobantes', (tester) async {
+    await _pump(tester, {
+      ..._json(onboarding: _certifying),
+      'test_set': _testSet([
+        _case('E310000000001', 'accepted', total: 1180),
+        _case('E320000000011', 'sent', via: 'rfce', total: 40120),
+        _case('E340000000001', 'pending', modifies: 'E310000000001'),
+      ]),
+    });
 
-    expect(find.text('Documentos'), findsOneWidget);
-    expect(find.text('Resúmenes'), findsOneWidget);
-    expect(find.text('Generar'), findsNothing);
+    expect(find.textContaining('3 comprobantes (1 de consumo van como resumen) · 1 aceptados'), findsOneWidget);
+    expect(find.text('Continuar envío'), findsOneWidget);
+    expect(find.text('Consultar'), findsOneWidget);
+    expect(find.text('Cargar otro'), findsOneWidget);
+
+    await tester.tap(find.text('Ver comprobantes'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('E340000000001 · Nota de crédito'), findsOneWidget);
+    expect(find.textContaining('modifica E310000000001'), findsOneWidget);
+    expect(find.textContaining('Facturas de consumo < 250Mil'), findsOneWidget);
+    // Lo pendiente todavía no tiene XML firmado.
+    final downloads = tester.widgetList<IconButton>(find.widgetWithIcon(IconButton, HugeIcons.strokeRoundedDownload04));
+    expect(downloads.map((b) => b.onPressed != null), [true, true, false]);
+  });
+
+  testWidgets('set rechazado: no deja enviar y pide cargar el nuevo', (tester) async {
+    await _pump(tester, {
+      ..._json(onboarding: _certifying),
+      'test_set': _testSet([
+        _case('E310000000001', 'rejected', messages: [
+          {'code': '2', 'message': 'Rechazado por la DGII'},
+        ]),
+        _case('E340000000001', 'pending'),
+      ]),
+    });
+
+    expect(find.textContaining('La DGII rechazó E310000000001'), findsOneWidget);
+    expect(find.text('Enviar a la DGII'), findsNothing);
+    expect(find.text('Continuar envío'), findsNothing);
+    expect(find.text('Cargar otro'), findsOneWidget);
   });
 
   testWidgets('cliente ya autorizado: la certificación queda resumida', (tester) async {
@@ -298,27 +329,19 @@ void main() {
     await _pump(
       tester,
       {
-        ..._json(
-          onboarding: {
-            'rnc': '133328828',
-            'legal_name': 'NUEVO CLIENTE SRL',
-            'fiscal_address': 'SANTIAGO',
-            'alanube_company_id': '01M1',
-            'set_test_id': '01X',
-          },
-        ),
-        'set_test': {
-          'id': '01X',
-          'status': 'ACCEPTED',
-          'processed': 20,
-          'documents_zip_url': 'https://s3/docs.zip',
-          'resumes_zip_url': 'https://s3/res.zip',
-        },
+        ..._json(onboarding: _certifying),
+        'test_set': _testSet([
+          _case('E310000000001', 'accepted'),
+          _case('E320000000011', 'sent', via: 'rfce'),
+          _case('E340000000001', 'error', messages: [
+            {'code': null, 'message': 'La DGII no respondio a tiempo al enviar el e-CF.'},
+          ]),
+        ]),
       },
       width: 480,
     );
 
     expect(tester.takeException(), isNull);
-    expect(find.text('Resúmenes'), findsOneWidget);
+    expect(find.text('Ver comprobantes'), findsOneWidget);
   });
 }

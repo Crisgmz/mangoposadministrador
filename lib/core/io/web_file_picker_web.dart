@@ -101,3 +101,20 @@ Future<PickedImage?> pickFileFromWeb({
 
   return completer.future;
 }
+
+/// Descarga [content] como archivo con el diálogo del browser.
+void downloadTextFileFromWeb(
+  String content,
+  String filename, {
+  String mimeType = 'text/plain',
+}) {
+  final blob = html.Blob([content], '$mimeType;charset=utf-8');
+  final url = html.Url.createObjectUrlFromBlob(blob);
+  final anchor = html.AnchorElement(href: url)
+    ..download = filename
+    ..style.display = 'none';
+  html.document.body?.append(anchor);
+  anchor.click();
+  anchor.remove();
+  html.Url.revokeObjectUrl(url);
+}
