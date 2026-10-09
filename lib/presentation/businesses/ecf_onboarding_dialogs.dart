@@ -1091,12 +1091,21 @@ const ecfTestTypeLabels = <String, String>{
 
 /// Los comprobantes del set con lo que respondió la DGII.
 class EcfTestSetDialog extends StatelessWidget {
-  const EcfTestSetDialog({required this.testSet, required this.onDownload, super.key});
+  const EcfTestSetDialog({
+    required this.testSet,
+    required this.onDownload,
+    this.onPrint,
+    super.key,
+  });
 
   final EcfTestSet testSet;
 
   /// Descarga el XML firmado de un caso (lo hace la sección: usa el repo).
   final Future<void> Function(EcfTestCase c) onDownload;
+
+  /// Descarga la representación impresa (PDF). Solo para e-CF, no para
+  /// aprobaciones comerciales.
+  final Future<void> Function(EcfTestCase c)? onPrint;
 
   Color _statusColor(EcfTestCase c) {
     switch (c.status) {
@@ -1118,7 +1127,7 @@ class EcfTestSetDialog extends StatelessWidget {
     final money = NumberFormat('#,##0.00', 'en_US');
     final summaries = testSet.cases.where((c) => c.isSummary).toList();
     return AlertDialog(
-      title: Text(testSet.filename ?? 'Set de pruebas'),
+      title: Text(testSet.filename ?? (testSet.isSimulation ? 'Simulación e-CF' : 'Set de pruebas')),
       content: SizedBox(
         width: 640,
         child: SingleChildScrollView(
@@ -1189,6 +1198,13 @@ class EcfTestSetDialog extends StatelessWidget {
                         onPressed: c.hasXml ? () => onDownload(c) : null,
                         icon: const Icon(HugeIcons.strokeRoundedDownload04, size: 15),
                       ),
+                      if (onPrint != null && !c.isApproval)
+                        IconButton(
+                          tooltip: 'Representación impresa (PDF)',
+                          visualDensity: VisualDensity.compact,
+                          onPressed: c.hasXml ? () => onPrint!(c) : null,
+                          icon: const Icon(HugeIcons.strokeRoundedPdf01, size: 15),
+                        ),
                     ],
                   ),
                 ),

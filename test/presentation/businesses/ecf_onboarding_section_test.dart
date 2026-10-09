@@ -254,9 +254,11 @@ void main() {
     expect(find.text('Certificación DGII'), findsOneWidget);
     expect(find.text('Firmar XML de postulación'), findsOneWidget);
     expect(find.textContaining('Firmado el'), findsOneWidget);
-    expect(find.text('Set de pruebas de la DGII'), findsOneWidget);
-    expect(find.textContaining('Pruebas de datos e-CF'), findsOneWidget);
-    expect(find.text('Cargar archivo'), findsOneWidget);
+    expect(find.text('Pruebas de datos e-CF'), findsOneWidget);
+    expect(find.textContaining('(Pruebas de datos e-CF) un Excel'), findsOneWidget);
+    expect(find.text('Pruebas de aprobación comercial'), findsOneWidget);
+    // Un "Cargar archivo" por cada set de la DGII.
+    expect(find.text('Cargar archivo'), findsNWidgets(2));
     expect(find.text('Enviar a la DGII'), findsNothing);
     expect(find.text('La DGII ya lo autorizó'), findsOneWidget);
     // Sin autorización, el paso de secuencias sigue disponible pero no es el actual.
@@ -286,6 +288,80 @@ void main() {
     // Lo pendiente todavía no tiene XML firmado.
     final downloads = tester.widgetList<IconButton>(find.widgetWithIcon(IconButton, HugeIcons.strokeRoundedDownload04));
     expect(downloads.map((b) => b.onPressed != null), [true, true, false]);
+  });
+
+  testWidgets('aprobaciones comerciales: su propio paso, sin tocar el set de e-CF', (tester) async {
+    await _pump(tester, {
+      ..._json(onboarding: _certifying),
+      'test_set': _testSet([
+        _case('E310000000001', 'accepted'),
+      ]),
+      'approval_set': {
+        ..._testSet([
+          _case('E310000000001', 'accepted', via: 'acecf', total: 7080),
+          _case('E340000000018', 'pending', via: 'acecf', total: 0),
+          _case('E450000000002', 'error', via: 'acecf', messages: [
+            {'code': null, 'message': 'El e-NCF no existe'},
+          ]),
+        ]),
+        'kind': 'acecf',
+        'filename': '133051842-09102026121152.xlsx',
+      },
+    });
+
+    expect(find.textContaining('3 aprobaciones · 1 aceptadas · 2 por enviar.'), findsOneWidget);
+    expect(find.textContaining('No se pudieron enviar E450000000002'), findsOneWidget);
+    // El e-CF ya está completo: solo el paso de aprobaciones ofrece enviar.
+    expect(find.text('Continuar envío'), findsOneWidget);
+    expect(find.text('Consultar'), findsNothing);
+
+    await tester.tap(find.text('Ver aprobaciones'));
+    await tester.pumpAndSettle();
+    expect(find.text('133051842-09102026121152.xlsx'), findsOneWidget);
+    expect(find.textContaining('E340000000018 · Nota de crédito'), findsOneWidget);
+    expect(find.text('El e-NCF no existe'), findsOneWidget);
+    // Sin resúmenes de consumo, no aparece la nota del portal.
+    expect(find.textContaining('Facturas de consumo < 250Mil'), findsNothing);
+  });
+
+  testWidgets('simulación: sin el set de datos no se puede generar', (tester) async {
+    await _pump(tester, _json(onboarding: _certifying));
+
+    expect(find.text('Pruebas de simulación e-CF'), findsOneWidget);
+    expect(find.textContaining('cárgalo primero'), findsOneWidget);
+    final generate = tester.widget<OutlinedButton>(
+      find.ancestor(of: find.text('Generar comprobantes'), matching: find.byType(OutlinedButton)),
+    );
+    expect(generate.onPressed, isNull);
+  });
+
+  testWidgets('simulación generada: enviar, ver, PDFs y generar de nuevo', (tester) async {
+    await _pump(tester, {
+      ..._json(onboarding: _certifying),
+      'test_set': _testSet([_case('E310000000001', 'accepted')]),
+      'simulation_set': {
+        ..._testSet([
+          _case('E310000000013', 'accepted', total: 7080),
+          _case('E320000000017', 'accepted', via: 'rfce', total: 40120),
+          _case('E340000000020', 'pending', modifies: 'E310000000013'),
+        ]),
+        'kind': 'sim',
+        'filename': null,
+      },
+    });
+
+    expect(find.textContaining('3 comprobantes (1 de consumo van como resumen) · 2 aceptados · 1 por enviar.'), findsOneWidget);
+    expect(find.text('Representaciones (PDF)'), findsOneWidget);
+    expect(find.text('Generar de nuevo'), findsOneWidget);
+    // El set de datos ya está aceptado: el único "Continuar envío" es el de la simulación.
+    expect(find.text('Continuar envío'), findsOneWidget);
+
+    await tester.tap(find.text('Ver comprobantes').last);
+    await tester.pumpAndSettle();
+    expect(find.text('Simulación e-CF'), findsOneWidget);
+    // XML y PDF para lo firmado; lo pendiente todavía no tiene ninguno.
+    final pdfs = tester.widgetList<IconButton>(find.widgetWithIcon(IconButton, HugeIcons.strokeRoundedPdf01));
+    expect(pdfs.map((b) => b.onPressed != null), [true, true, false]);
   });
 
   testWidgets('set rechazado: no deja enviar y pide cargar el nuevo', (tester) async {

@@ -268,6 +268,25 @@ void main() {
       expect(t.canCheck, isFalse);
     });
 
+    test('aprobaciones comerciales llegan aparte del set de e-CF', () {
+      final s = EcfOnboardingStatus.fromJson({
+        ..._status(onboarding: {..._data, 'alanube_company_id': '01M1'}),
+        'test_set': null,
+        'approval_set': {
+          'kind': 'acecf',
+          'filename': '133051842-09102026121152.xlsx',
+          'cases': [testCase('E310000000001', 'accepted', via: 'acecf', total: 7080)],
+        },
+      });
+      expect(s.testSet, isNull);
+      final a = s.approvalSet!;
+      expect(a.isApprovals, isTrue);
+      expect(a.cases.single.isApproval, isTrue);
+      expect(a.cases.single.hasXml, isTrue);
+      expect(a.isComplete, isTrue);
+      expect(a.summaries, 0);
+    });
+
     test('lote de envío: sigue mientras el servidor diga more', () {
       final r = EcfTestSetSendResult.fromJson({
         'sent': 3,

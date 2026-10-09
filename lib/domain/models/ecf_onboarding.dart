@@ -20,6 +20,8 @@ class EcfOnboardingStatus {
     this.company,
     this.companyError,
     this.testSet,
+    this.approvalSet,
+    this.simulationSet,
   });
 
   final String businessId;
@@ -54,6 +56,12 @@ class EcfOnboardingStatus {
   /// Set de pruebas de la DGII cargado. Solo viene mientras la certificación
   /// está en curso.
   final EcfTestSet? testSet;
+
+  /// Aprobaciones comerciales de la DGII cargadas (paso siguiente del set).
+  final EcfTestSet? approvalSet;
+
+  /// e-CF de la simulación (paso 4 del portal), generados desde el set de datos.
+  final EcfTestSet? simulationSet;
 
   bool get isProduction => environment == 'production';
 
@@ -94,6 +102,8 @@ class EcfOnboardingStatus {
     final settings = _map(json['alanube_settings']);
     final company = _map(json['company']);
     final testSet = _map(json['test_set']);
+    final approvalSet = _map(json['approval_set']);
+    final simulationSet = _map(json['simulation_set']);
     return EcfOnboardingStatus(
       businessId: (business['id'] as String?) ?? '',
       businessName: (business['business_name'] as String?) ?? '',
@@ -111,6 +121,8 @@ class EcfOnboardingStatus {
       company: company == null ? null : EcfCompany.fromJson(company),
       companyError: json['company_error'] as String?,
       testSet: testSet == null ? null : EcfTestSet.fromJson(testSet),
+      approvalSet: approvalSet == null ? null : EcfTestSet.fromJson(approvalSet),
+      simulationSet: simulationSet == null ? null : EcfTestSet.fromJson(simulationSet),
     );
   }
 }
@@ -522,13 +534,20 @@ enum EcfSignKind {
 class EcfTestSet {
   const EcfTestSet({
     required this.cases,
+    this.kind = 'ecf',
     this.filename,
     this.loadedAt,
     this.sessionExpiresAt,
   });
 
+  /// `ecf` = pruebas de datos e-CF; `acecf` = pruebas de aprobación comercial;
+  /// `sim` = pruebas de simulación e-CF.
+  final String kind;
   final String? filename;
   final DateTime? loadedAt;
+
+  bool get isApprovals => kind == 'acecf';
+  bool get isSimulation => kind == 'sim';
 
   /// Mientras no venza, consultar a la DGII no pide el certificado.
   final DateTime? sessionExpiresAt;
@@ -557,6 +576,7 @@ class EcfTestSet {
 
   factory EcfTestSet.fromJson(Map<String, dynamic> json) {
     return EcfTestSet(
+      kind: (json['kind'] as String?) ?? 'ecf',
       filename: json['filename'] as String?,
       loadedAt: _date(json['loaded_at']),
       sessionExpiresAt: _date(json['session_expires_at']),
@@ -606,6 +626,9 @@ class EcfTestCase {
   final DateTime? sentAt;
 
   bool get isSummary => via == 'rfce';
+
+  /// Aprobación comercial (el contribuyente firma como comprador).
+  bool get isApproval => via == 'acecf';
   bool get isAccepted => status == 'accepted' || status == 'conditional';
 
   /// Ya se firmó: hay XML para descargar.
@@ -688,6 +711,263 @@ class EcfTestSetSendResult {
       more: (json['more'] as bool?) ?? false,
       stoppedReason: json['stopped_reason'] as String?,
       testSet: EcfTestSet.fromJson(_map(json['test_set']) ?? const {}),
+    );
+  }
+}
+
+/// Datos de la representación impresa (RI) de un e-CF ya firmado, armados
+/// por el servidor con lo mismo que se firmó (Informe Técnico e-CF de la DGII,
+/// sección 18). Los montos vienen como en el XML.
+class EcfPrintModel {
+  const EcfPrintModel({
+    required this.typeCode,
+    required this.typeName,
+    required this.encf,
+    required this.issuer,
+    required this.items,
+    required this.adjustments,
+    required this.totals,
+    required this.signedAt,
+    required this.securityCode,
+    required this.qrUrl,
+    required this.consumerSummary,
+    this.dueDate,
+    this.modifiedEncf,
+    this.modifiedDate,
+    this.modification,
+    this.modificationReason,
+    this.buyer,
+    this.currency,
+  });
+
+  final String typeCode;
+
+  /// En palabras: "Factura de Crédito Fiscal Electrónica"…
+  final String typeName;
+  final String encf;
+  final String? dueDate;
+  final String? modifiedEncf;
+  final String? modifiedDate;
+
+  /// Código de modificación en palabras.
+  final String? modification;
+  final String? modificationReason;
+  final EcfPrintIssuer issuer;
+  final EcfPrintBuyer? buyer;
+  final List<EcfPrintItem> items;
+  final List<EcfPrintAdjustment> adjustments;
+  final EcfPrintTotals totals;
+  final EcfPrintCurrency? currency;
+
+  /// Fecha de firma digital, dd-MM-yyyy HH:mm:ss.
+  final String signedAt;
+  final String securityCode;
+  final String qrUrl;
+
+  /// Factura de consumo menor de 250 mil (QR de consulta de consumo).
+  final bool consumerSummary;
+
+  factory EcfPrintModel.fromJson(Map<String, dynamic> json) {
+    final buyer = _map(json['buyer']);
+    final currency = _map(json['currency']);
+    return EcfPrintModel(
+      typeCode: (json['type_code'] as String?) ?? '',
+      typeName: (json['type_name'] as String?) ?? '',
+      encf: (json['encf'] as String?) ?? '',
+      dueDate: json['due_date'] as String?,
+      modifiedEncf: json['modified_encf'] as String?,
+      modifiedDate: json['modified_date'] as String?,
+      modification: json['modification'] as String?,
+      modificationReason: json['modification_reason'] as String?,
+      issuer: EcfPrintIssuer.fromJson(_map(json['issuer']) ?? const {}),
+      buyer: buyer == null ? null : EcfPrintBuyer.fromJson(buyer),
+      items: ((json['items'] as List?) ?? const [])
+          .whereType<Map>()
+          .map((e) => EcfPrintItem.fromJson(Map<String, dynamic>.from(e)))
+          .toList(growable: false),
+      adjustments: ((json['adjustments'] as List?) ?? const [])
+          .whereType<Map>()
+          .map((e) => EcfPrintAdjustment.fromJson(Map<String, dynamic>.from(e)))
+          .toList(growable: false),
+      totals: EcfPrintTotals.fromJson(_map(json['totals']) ?? const {}),
+      currency: currency == null ? null : EcfPrintCurrency.fromJson(currency),
+      signedAt: (json['signed_at'] as String?) ?? '',
+      securityCode: (json['security_code'] as String?) ?? '',
+      qrUrl: (json['qr_url'] as String?) ?? '',
+      consumerSummary: (json['consumer_summary'] as bool?) ?? false,
+    );
+  }
+}
+
+class EcfPrintIssuer {
+  const EcfPrintIssuer({
+    required this.rnc,
+    this.tradeName,
+    this.legalName,
+    this.branch,
+    this.address,
+    this.municipality,
+    this.province,
+    this.phone,
+    this.email,
+    this.issueDate,
+  });
+
+  final String rnc;
+  final String? tradeName;
+  final String? legalName;
+  final String? branch;
+  final String? address;
+
+  /// En palabras (el XML lleva el código de la DGII).
+  final String? municipality;
+  final String? province;
+  final String? phone;
+  final String? email;
+  final String? issueDate;
+
+  factory EcfPrintIssuer.fromJson(Map<String, dynamic> json) {
+    return EcfPrintIssuer(
+      rnc: (json['rnc'] as String?) ?? '',
+      tradeName: json['trade_name'] as String?,
+      legalName: json['legal_name'] as String?,
+      branch: json['branch'] as String?,
+      address: json['address'] as String?,
+      municipality: json['municipality'] as String?,
+      province: json['province'] as String?,
+      phone: json['phone'] as String?,
+      email: json['email'] as String?,
+      issueDate: json['issue_date'] as String?,
+    );
+  }
+}
+
+class EcfPrintBuyer {
+  const EcfPrintBuyer({this.name, this.rnc, this.foreignId});
+
+  final String? name;
+  final String? rnc;
+  final String? foreignId;
+
+  factory EcfPrintBuyer.fromJson(Map<String, dynamic> json) {
+    return EcfPrintBuyer(
+      name: json['name'] as String?,
+      rnc: json['rnc'] as String?,
+      foreignId: json['foreign_id'] as String?,
+    );
+  }
+}
+
+class EcfPrintItem {
+  const EcfPrintItem({
+    required this.line,
+    required this.exempt,
+    required this.description,
+    this.quantity,
+    this.detail,
+    this.unit,
+    this.price,
+    this.itbis,
+    this.discount,
+    this.surcharge,
+    this.value,
+  });
+
+  final String line;
+
+  /// La RI pone "E" delante de la descripción de lo exento.
+  final bool exempt;
+  final String description;
+  final String? quantity;
+  final String? detail;
+  final String? unit;
+  final String? price;
+  final String? itbis;
+  final String? discount;
+  final String? surcharge;
+  final String? value;
+
+  factory EcfPrintItem.fromJson(Map<String, dynamic> json) {
+    return EcfPrintItem(
+      line: (json['line'] as String?) ?? '',
+      exempt: (json['exempt'] as bool?) ?? false,
+      description: (json['description'] as String?) ?? '',
+      quantity: json['quantity'] as String?,
+      detail: json['detail'] as String?,
+      unit: json['unit'] as String?,
+      price: json['price'] as String?,
+      itbis: json['itbis'] as String?,
+      discount: json['discount'] as String?,
+      surcharge: json['surcharge'] as String?,
+      value: json['value'] as String?,
+    );
+  }
+}
+
+class EcfPrintAdjustment {
+  const EcfPrintAdjustment({required this.description, required this.kind, this.percent, this.amount});
+
+  final String description;
+
+  /// `D` descuento, `R` recargo.
+  final String kind;
+  final String? percent;
+  final String? amount;
+
+  factory EcfPrintAdjustment.fromJson(Map<String, dynamic> json) {
+    return EcfPrintAdjustment(
+      description: (json['description'] as String?) ?? '',
+      kind: (json['kind'] as String?) ?? '',
+      percent: json['percent'] as String?,
+      amount: json['amount'] as String?,
+    );
+  }
+}
+
+class EcfPrintTotals {
+  const EcfPrintTotals({
+    this.taxed,
+    this.exempt,
+    this.itbis,
+    this.additionalTaxes,
+    this.itbisWithheld,
+    this.isrWithheld,
+    this.total,
+  });
+
+  final String? taxed;
+  final String? exempt;
+  final String? itbis;
+  final String? additionalTaxes;
+  final String? itbisWithheld;
+  final String? isrWithheld;
+  final String? total;
+
+  factory EcfPrintTotals.fromJson(Map<String, dynamic> json) {
+    return EcfPrintTotals(
+      taxed: json['taxed'] as String?,
+      exempt: json['exempt'] as String?,
+      itbis: json['itbis'] as String?,
+      additionalTaxes: json['additional_taxes'] as String?,
+      itbisWithheld: json['itbis_withheld'] as String?,
+      isrWithheld: json['isr_withheld'] as String?,
+      total: json['total'] as String?,
+    );
+  }
+}
+
+class EcfPrintCurrency {
+  const EcfPrintCurrency({required this.code, this.rate, this.total});
+
+  final String code;
+  final String? rate;
+  final String? total;
+
+  factory EcfPrintCurrency.fromJson(Map<String, dynamic> json) {
+    return EcfPrintCurrency(
+      code: (json['code'] as String?) ?? '',
+      rate: json['rate'] as String?,
+      total: json['total'] as String?,
     );
   }
 }

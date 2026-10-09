@@ -52,3 +52,13 @@ void downloadTextFileFromWeb(
     'downloadTextFileFromWeb solo está disponible en Flutter Web.',
   );
 }
+
+void downloadBytesFromWeb(
+  Uint8List bytes,
+  String filename, {
+  String mimeType = 'application/octet-stream',
+}) {
+  throw UnsupportedError(
+    'downloadBytesFromWeb solo está disponible en Flutter Web.',
+  );
+}

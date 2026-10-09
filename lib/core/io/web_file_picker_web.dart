@@ -118,3 +118,20 @@ void downloadTextFileFromWeb(
   anchor.remove();
   html.Url.revokeObjectUrl(url);
 }
+
+/// Descarga [bytes] (un PDF, por ejemplo) con el diálogo del browser.
+void downloadBytesFromWeb(
+  Uint8List bytes,
+  String filename, {
+  String mimeType = 'application/octet-stream',
+}) {
+  final blob = html.Blob([bytes], mimeType);
+  final url = html.Url.createObjectUrlFromBlob(blob);
+  final anchor = html.AnchorElement(href: url)
+    ..download = filename
+    ..style.display = 'none';
+  html.document.body?.append(anchor);
+  anchor.click();
+  anchor.remove();
+  html.Url.revokeObjectUrl(url);
+}

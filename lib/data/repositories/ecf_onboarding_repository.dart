@@ -139,14 +139,18 @@ class EcfOnboardingRepository {
     return url;
   }
 
-  /// Carga el Excel del set de pruebas que da la DGII (.xlsx, o la hoja ECF
-  /// en .csv). Reemplaza el que hubiera.
+  /// Carga un Excel de la DGII (.xlsx, o una hoja en .csv): el de pruebas de
+  /// datos e-CF ([setKind] `ecf`) o el de aprobaciones comerciales (`acecf`).
+  /// Reemplaza el que hubiera de ese tipo; si el archivo es del otro, falla con
+  /// `wrong_test_set`.
   Future<EcfTestSet> importTestSet({
     required String businessId,
+    required String setKind,
     required String filename,
     required Uint8List bytes,
   }) async {
     final data = await _onboarding('import_test_set', businessId, {
+      'set_kind': setKind,
       'file': {'filename': filename, 'content_base64': base64Encode(bytes)},
     });
     return EcfTestSet.fromJson(_asMap(data['test_set']));
@@ -156,11 +160,13 @@ class EcfOnboardingRepository {
   /// servidor no lo guarda; si responde `more`, hay que volver a llamar.
   Future<EcfTestSetSendResult> sendTestSet({
     required String businessId,
+    required String setKind,
     required String certificateFilename,
     required Uint8List certificateBytes,
     required String certificatePassword,
   }) async {
     final data = await _onboarding('send_test_set', businessId, {
+      'set_kind': setKind,
       'certificate': {
         'filename': certificateFilename,
         'content_base64': base64Encode(certificateBytes),
@@ -170,15 +176,25 @@ class EcfOnboardingRepository {
     return EcfTestSetSendResult.fromJson(data);
   }
 
-  /// Consulta los envíos en proceso. Sin [certificate*] usa la sesión con la
-  /// DGII del último envío; si venció, falla con `dgii_session_expired`.
+  /// Paso 4 del portal: arma los e-CF de la simulación con el set de datos
+  /// aceptado como modelo. Volver a generar usa e-NCF nuevos.
+  Future<EcfTestSet> generateSimulationSet(String businessId) async {
+    final data = await _onboarding('generate_simulation_set', businessId);
+    return EcfTestSet.fromJson(_asMap(data['test_set']));
+  }
+
+  /// Consulta los envíos en proceso de un set (`ecf` o `sim`). Sin
+  /// [certificate*] usa la sesión con la DGII del último envío; si venció,
+  /// falla con `dgii_session_expired`.
   Future<EcfTestSet> checkTestSet(
     String businessId, {
+    String setKind = 'ecf',
     String? certificateFilename,
     Uint8List? certificateBytes,
     String? certificatePassword,
   }) async {
     final data = await _onboarding('check_test_set', businessId, {
+      'set_kind': setKind,
       if (certificateBytes != null)
         'certificate': {
           'filename': certificateFilename,
@@ -189,8 +205,9 @@ class EcfOnboardingRepository {
     return EcfTestSet.fromJson(_asMap(data['test_set']));
   }
 
-  /// XML firmado de un caso, como se mandó a la DGII.
-  Future<({String filename, String xml})> testCaseXml(
+  /// XML firmado de un caso, como se mandó a la DGII, y los datos de su
+  /// representación impresa (null en las aprobaciones comerciales).
+  Future<({String filename, String xml, EcfPrintModel? print})> testCaseXml(
     String businessId,
     String caseId,
   ) async {
@@ -199,7 +216,12 @@ class EcfOnboardingRepository {
     if (xml is! String || xml.isEmpty) {
       throw const EcfOnboardingException('El servidor no devolvió el XML.');
     }
-    return (filename: (data['filename'] as String?) ?? '$caseId.xml', xml: xml);
+    final print = data['print'];
+    return (
+      filename: (data['filename'] as String?) ?? '$caseId.xml',
+      xml: xml,
+      print: print is Map ? EcfPrintModel.fromJson(Map<String, dynamic>.from(print)) : null,
+    );
   }
 
   Future<void> setDgiiAuthorized(String businessId, bool authorized) async {
