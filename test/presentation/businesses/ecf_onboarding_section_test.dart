@@ -25,6 +25,13 @@ class _FakeRepo extends EcfOnboardingRepository {
 
   final List<Map<String, dynamic>> checks;
   final provisions = <bool>[];
+  final simulationCounts = <Map<String, int>>[];
+
+  @override
+  Future<EcfTestSet> generateSimulationSet(String businessId, {required Map<String, int> counts}) async {
+    simulationCounts.add(counts);
+    return const EcfTestSet(cases: [], kind: 'sim');
+  }
 
   @override
   Future<EcfPreflightResult> provision({
@@ -324,15 +331,59 @@ void main() {
     expect(find.textContaining('Facturas de consumo < 250Mil'), findsNothing);
   });
 
-  testWidgets('simulación: sin el set de datos no se puede generar', (tester) async {
-    await _pump(tester, _json(onboarding: _certifying));
+  testWidgets('simulación: sin set de datos (certificación con proveedor) igual genera', (tester) async {
+    final repo = await _pump(tester, _json(onboarding: _certifying));
 
     expect(find.text('Pruebas de simulación e-CF'), findsOneWidget);
-    expect(find.textContaining('cárgalo primero'), findsOneWidget);
     final generate = tester.widget<OutlinedButton>(
       find.ancestor(of: find.text('Generar comprobantes'), matching: find.byType(OutlinedButton)),
     );
-    expect(generate.onPressed, isNull);
+    expect(generate.onPressed, isNotNull);
+
+    await tester.tap(find.text('Generar comprobantes'));
+    await tester.pumpAndSettle();
+    // Sin el set, no se sabe cuántos modelos hay: todo en 1 y editable.
+    for (final key in ['31', '32', '32rfce', '33', '34', '41', '43', '44', '45', '46', '47']) {
+      final field = tester.widget<TextField>(find.byKey(ValueKey('sim-count-$key')));
+      expect(field.controller!.text, '1');
+      expect(field.enabled, isTrue);
+    }
+    await tester.tap(find.widgetWithText(FilledButton, 'Generar'));
+    await tester.pumpAndSettle();
+
+    // El modelo lo pone el servidor (el genérico de la DGII): no se pide archivo.
+    expect(find.text('Falta el set de datos de la DGII'), findsNothing);
+    expect(repo.simulationCounts.single.length, 11);
+    expect(find.textContaining('Simulación lista'), findsOneWidget);
+  });
+
+  testWidgets('simulación: genera lo que pide el portal (1 de cada uno)', (tester) async {
+    final repo = await _pump(tester, {
+      ..._json(onboarding: _certifying),
+      'test_set': _testSet([
+        _case('E310000000001', 'accepted', total: 7080),
+        _case('E310000000005', 'accepted', total: 83320),
+        _case('E320000000011', 'accepted', via: 'rfce', total: 40120),
+        _case('E340000000001', 'accepted', modifies: 'E310000000001'),
+      ]),
+    });
+
+    await tester.tap(find.text('Generar comprobantes'));
+    await tester.pumpAndSettle();
+    expect(find.text('Generar la simulación'), findsOneWidget);
+    String value(String key) => tester.widget<TextField>(find.byKey(ValueKey('sim-count-$key'))).controller!.text;
+    expect(value('31'), '1');
+    expect(value('32rfce'), '1');
+    expect(value('34'), '1');
+    // Sin modelo de ese tipo en el set: 0 y no se puede cambiar.
+    expect(value('32'), '0');
+    expect(tester.widget<TextField>(find.byKey(const ValueKey('sim-count-47'))).enabled, isFalse);
+
+    await tester.tap(find.widgetWithText(FilledButton, 'Generar'));
+    await tester.pumpAndSettle();
+    expect(repo.simulationCounts, [
+      {'31': 1, '32rfce': 1, '34': 1},
+    ]);
   });
 
   testWidgets('simulación generada: enviar, ver, PDFs y generar de nuevo', (tester) async {

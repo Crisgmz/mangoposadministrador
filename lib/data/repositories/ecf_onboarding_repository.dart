@@ -177,9 +177,15 @@ class EcfOnboardingRepository {
   }
 
   /// Paso 4 del portal: arma los e-CF de la simulación con el set de datos
-  /// aceptado como modelo. Volver a generar usa e-NCF nuevos.
-  Future<EcfTestSet> generateSimulationSet(String businessId) async {
-    final data = await _onboarding('generate_simulation_set', businessId);
+  /// aceptado como modelo, en las cantidades que pide el portal
+  /// ({'31': 1, '32': 1, '32rfce': 1, …}). Volver a generar usa e-NCF nuevos.
+  /// El modelo lo resuelve el servidor (set de este negocio, de otra sucursal
+  /// con el mismo RNC, o el genérico de la DGII).
+  Future<EcfTestSet> generateSimulationSet(
+    String businessId, {
+    required Map<String, int> counts,
+  }) async {
+    final data = await _onboarding('generate_simulation_set', businessId, {'counts': counts});
     return EcfTestSet.fromJson(_asMap(data['test_set']));
   }
 

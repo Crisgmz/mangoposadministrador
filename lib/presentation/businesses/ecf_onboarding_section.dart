@@ -548,10 +548,21 @@ class _EcfOnboardingSectionState extends ConsumerState<EcfOnboardingSection> {
       );
       if (!ok) return;
     }
+    // Modelos que hay por categoría (el set de datos ya aceptado).
+    final available = <String, int>{};
+    for (final c in s.testSet?.cases ?? const <EcfTestCase>[]) {
+      available.update(c.simulationCategory, (n) => n + 1, ifAbsent: () => 1);
+    }
+    if (!mounted) return;
+    final counts = await showDialog<Map<String, int>>(
+      context: context,
+      builder: (_) => EcfSimulationCountsDialog(available: available),
+    );
+    if (counts == null || !mounted) return;
     EcfTestSet? built;
     final ok = await _run(
       'Generando los e-CF de la simulación…',
-      () async => built = await _repo.generateSimulationSet(widget.businessId),
+      () async => built = await _repo.generateSimulationSet(widget.businessId, counts: counts),
     );
     if (!ok || built == null || !mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -1049,7 +1060,6 @@ class _EcfOnboardingSectionState extends ConsumerState<EcfOnboardingSection> {
   /// simulación, generar y bajar las representaciones impresas).
   Widget _testSetActions(EcfTestSet? t, String kind, bool locked, {EcfOnboardingStatus? status}) {
     final simulation = kind == 'sim';
-    final canGenerate = !simulation || (status?.testSet?.cases.isNotEmpty ?? false);
     return Wrap(
       spacing: 6,
       runSpacing: 6,
@@ -1079,7 +1089,7 @@ class _EcfOnboardingSectionState extends ConsumerState<EcfOnboardingSection> {
           ),
         if (simulation)
           OutlinedButton(
-            onPressed: locked || !canGenerate ? null : () => _generateSimulation(status!),
+            onPressed: locked ? null : () => _generateSimulation(status!),
             child: Text(t == null || t.isEmpty ? 'Generar comprobantes' : 'Generar de nuevo'),
           )
         else
@@ -1094,13 +1104,12 @@ class _EcfOnboardingSectionState extends ConsumerState<EcfOnboardingSection> {
   String _simulationDetail(EcfOnboardingStatus s) {
     final t = s.simulationSet;
     if (t == null || t.isEmpty) {
-      if (s.testSet == null || s.testSet!.isEmpty) {
-        return 'Se arma con el set de pruebas de e-CF que aceptó la DGII: cárgalo primero.';
-      }
-      return 'La DGII pide e-CF de la operación real (paso 4 del portal). Se generan '
-          'con el set ya aceptado de modelo, los datos del contribuyente, fecha de hoy y '
-          'e-NCF nuevos. Después de enviarlos, baja las representaciones impresas (PDF) '
-          'para el paso 5.';
+      return 'La DGII pide e-CF de la operación real (paso 4 del portal) y no da nada para '
+          'descargar: se generan aquí con los datos del contribuyente, fecha de hoy y e-NCF '
+          'nuevos, sobre el set de prueba de la DGII (el del paso 2 si este negocio lo tiene; '
+          'si se certifica con proveedor, la DGII se salta ese paso y se usa el genérico). '
+          'Después de enviarlos, sube en el portal el XML de la de consumo menor de 250 mil y '
+          'baja las representaciones impresas (PDF) para el paso 5.';
     }
     final text = StringBuffer(_testSetDetail(t));
     if (t.isComplete) {

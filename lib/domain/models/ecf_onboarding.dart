@@ -629,6 +629,10 @@ class EcfTestCase {
 
   /// Aprobación comercial (el contribuyente firma como comprador).
   bool get isApproval => via == 'acecf';
+
+  /// Como lo cuenta el portal de la DGII en la simulación: el E32 se parte en
+  /// `32` (desde 250 mil) y `32rfce` (menor, va como resumen).
+  String get simulationCategory => ecfType == '32' && isSummary ? '32rfce' : ecfType;
   bool get isAccepted => status == 'accepted' || status == 'conditional';
 
   /// Ya se firmó: hay XML para descargar.

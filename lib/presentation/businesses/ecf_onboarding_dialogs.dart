@@ -1075,6 +1075,131 @@ class _EcfSigningCertificateDialogState extends State<EcfSigningCertificateDialo
   }
 }
 
+/// Lo que cuenta el portal de la DGII en "Estado actual de las pruebas de
+/// simulación", en el mismo orden.
+const ecfSimulationCategories = <String, String>{
+  '31': 'Comprobantes tipo 31',
+  '32': 'Comprobantes tipo 32 >= 250Mil',
+  '33': 'Comprobantes tipo 33',
+  '34': 'Comprobantes tipo 34',
+  '41': 'Comprobantes tipo 41',
+  '43': 'Comprobantes tipo 43',
+  '44': 'Comprobantes tipo 44',
+  '45': 'Comprobantes tipo 45',
+  '46': 'Comprobantes tipo 46',
+  '47': 'Comprobantes tipo 47',
+  '32rfce': 'Comprobantes tipo 32 RFCE',
+};
+
+/// Cuántos e-CF de cada tipo generar para la simulación: los que dice el
+/// portal ("0/1 Comprobantes tipo 31"…). Arranca en 1, que es lo que pide al
+/// reiniciar; el tope es lo que trae el set de datos para usar de modelo.
+class EcfSimulationCountsDialog extends StatefulWidget {
+  const EcfSimulationCountsDialog({required this.available, super.key});
+
+  /// Modelos disponibles por categoría (del set de datos ya aceptado). Vacío
+  /// si este negocio no lo tiene: el servidor busca el modelo y valida.
+  final Map<String, int> available;
+
+  @override
+  State<EcfSimulationCountsDialog> createState() => _EcfSimulationCountsDialogState();
+}
+
+class _EcfSimulationCountsDialogState extends State<EcfSimulationCountsDialog> {
+  bool get _knowsAvailable => widget.available.isNotEmpty;
+
+  bool _offers(String key) => !_knowsAvailable || (widget.available[key] ?? 0) > 0;
+
+  late final Map<String, TextEditingController> _fields = {
+    for (final k in ecfSimulationCategories.keys) k: TextEditingController(text: _offers(k) ? '1' : '0'),
+  };
+  String? _error;
+
+  @override
+  void dispose() {
+    for (final c in _fields.values) {
+      c.dispose();
+    }
+    super.dispose();
+  }
+
+  void _submit() {
+    final counts = <String, int>{};
+    for (final e in _fields.entries) {
+      final n = int.tryParse(e.value.text.trim()) ?? 0;
+      final max = widget.available[e.key] ?? 0;
+      if (_knowsAvailable && n > max) {
+        setState(() => _error = '${ecfSimulationCategories[e.key]}: el set de datos solo trae $max para usar de modelo.');
+        return;
+      }
+      if (n > 0) counts[e.key] = n;
+    }
+    if (counts.isEmpty) {
+      setState(() => _error = 'Pon cuántos pide el portal de al menos un tipo.');
+      return;
+    }
+    Navigator.pop(context, counts);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Generar la simulación'),
+      content: SizedBox(
+        width: 520,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const EcfNote(
+                color: AppColors.mutedForeground,
+                text: 'Copia lo que pide el portal en "Estado actual de las pruebas de '
+                    'simulación" (el número de la derecha: 0/1 → 1). Se arman con el set de '
+                    'datos ya aceptado, los datos del contribuyente, fecha de hoy y e-NCF '
+                    'nuevos. Las notas de crédito y débito van con una factura de esta tanda.',
+              ),
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 10,
+                runSpacing: 4,
+                children: [
+                  for (final e in ecfSimulationCategories.entries)
+                    SizedBox(
+                      width: 240,
+                      child: TextField(
+                        key: ValueKey('sim-count-${e.key}'),
+                        controller: _fields[e.key],
+                        enabled: _offers(e.key),
+                        keyboardType: TextInputType.number,
+                        inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                        decoration: InputDecoration(
+                          labelText: e.value,
+                          helperText: _knowsAvailable ? 'máx. ${widget.available[e.key] ?? 0}' : null,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+              if (_error != null) ...[
+                const SizedBox(height: 10),
+                EcfNote(color: AppColors.destructive, text: _error!),
+              ],
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancelar'),
+        ),
+        FilledButton(onPressed: _submit, child: const Text('Generar')),
+      ],
+    );
+  }
+}
+
 /// Nombre de cada tipo de e-CF del set de pruebas.
 const ecfTestTypeLabels = <String, String>{
   '31': 'Crédito fiscal',
