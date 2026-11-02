@@ -22,6 +22,7 @@ import '../../domain/models/business_member.dart';
 import '../../domain/models/business_overview.dart';
 import '../../domain/models/business_week_trend.dart';
 import '../../domain/models/customer_note.dart';
+import '../../domain/models/ecf_onboarding.dart';
 import '../../domain/models/membership_invoice.dart';
 import '../../domain/models/plan.dart';
 import '../../domain/models/print_failure.dart';
@@ -161,7 +162,7 @@ class _Body extends ConsumerWidget {
         DeferredSection(
           frames: 5,
           placeholderHeight: 300,
-          child: EcfOnboardingSection(businessId: business.id),
+          child: EcfOnboardingSection(owner: EcfOwner.business(business.id)),
         ),
         const SizedBox(height: 28),
         DeferredSection(

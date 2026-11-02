@@ -8,8 +8,8 @@ import '../../app/theme/app_colors.dart';
 import '../../core/io/web_file_picker.dart';
 import '../../domain/models/ecf_onboarding.dart';
 
-/// Diálogos del alta e-CF (ver `ecf_onboarding_section.dart`). Solo capturan
-/// y devuelven lo que escribió el operador; las reglas las valida el servidor.
+/// Diálogos del alta e-CF (ver `ecf_onboarding_section.dart`). Capturan datos
+/// y muestran los accesos recibidos; las reglas las valida el servidor.
 
 const ecfTypeLabels = <String, String>{
   'E31': 'E31 · Crédito fiscal',
@@ -182,6 +182,82 @@ class _EcfTaxpayerDialogState extends State<EcfTaxpayerDialog> {
 }
 
 // ---------------------------------------------------------------------------
+// Acceso recibido para la Oficina Virtual
+// ---------------------------------------------------------------------------
+
+class EcfOfvCredentialsDialog extends StatefulWidget {
+  const EcfOfvCredentialsDialog({required this.credentials, super.key});
+
+  final EcfOfvCredentials credentials;
+
+  @override
+  State<EcfOfvCredentialsDialog> createState() => _EcfOfvCredentialsDialogState();
+}
+
+class _EcfOfvCredentialsDialogState extends State<EcfOfvCredentialsDialog> {
+  bool _visible = true;
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Acceso a la Oficina Virtual'),
+      content: SizedBox(
+        width: 460,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              EcfLine('Usuario OFV', widget.credentials.ofvUser ?? '—'),
+              const SizedBox(height: 12),
+              const Text(
+                'Contraseña OFV',
+                style: TextStyle(fontSize: 12, color: AppColors.mutedForeground),
+              ),
+              const SizedBox(height: 4),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: SelectableText(
+                      _visible ? widget.credentials.ofvPassword : '••••••••',
+                      style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: _visible ? 'Ocultar contraseña OFV' : 'Mostrar contraseña OFV',
+                    visualDensity: VisualDensity.compact,
+                    onPressed: () => setState(() => _visible = !_visible),
+                    icon: Icon(
+                      _visible ? HugeIcons.strokeRoundedViewOff : HugeIcons.strokeRoundedView,
+                      size: 16,
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: 'Copiar contraseña OFV',
+                    visualDensity: VisualDensity.compact,
+                    onPressed: () => Clipboard.setData(
+                      ClipboardData(text: widget.credentials.ofvPassword),
+                    ),
+                    icon: const Icon(HugeIcons.strokeRoundedCopy01, size: 16),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cerrar'),
+        ),
+      ],
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Alta con certificado
 // ---------------------------------------------------------------------------
 
@@ -192,20 +268,67 @@ class EcfCertificateInput {
     required this.password,
   });
 
+  const EcfCertificateInput.stored()
+      : filename = null,
+        bytes = null,
+        password = null;
+
+  final String? filename;
+  final Uint8List? bytes;
+  final String? password;
+
+  bool get usesStoredCertificate => bytes == null;
+}
+
+class _CertificateSourceSelector extends StatelessWidget {
+  const _CertificateSourceSelector({
+    required this.filename,
+    required this.useSaved,
+    required this.onChanged,
+  });
+
   final String filename;
-  final Uint8List bytes;
-  final String password;
+  final bool useSaved;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        DropdownButtonFormField<bool>(
+          initialValue: useSaved,
+          isExpanded: true,
+          decoration: const InputDecoration(labelText: 'Certificado'),
+          items: const [
+            DropdownMenuItem(value: true, child: Text('Usar certificado de la solicitud')),
+            DropdownMenuItem(value: false, child: Text('Subir otro certificado')),
+          ],
+          onChanged: (value) {
+            if (value != null) onChanged(value);
+          },
+        ),
+        if (useSaved) ...[
+          const SizedBox(height: 10),
+          EcfLine('Archivo', filename),
+        ],
+        const SizedBox(height: 10),
+      ],
+    );
+  }
 }
 
 class EcfCertificateDialog extends StatefulWidget {
   const EcfCertificateDialog({
     required this.draft,
     required this.isProduction,
+    this.savedCertificateFilename,
     super.key,
   });
 
   final EcfTaxpayerDraft draft;
   final bool isProduction;
+  final String? savedCertificateFilename;
 
   @override
   State<EcfCertificateDialog> createState() => _EcfCertificateDialogState();
@@ -213,6 +336,7 @@ class EcfCertificateDialog extends StatefulWidget {
 
 class _EcfCertificateDialogState extends State<EcfCertificateDialog> {
   final _password = TextEditingController();
+  late bool _useSaved = widget.savedCertificateFilename != null;
   PickedImage? _file;
   bool _obscure = true;
   String? _error;
@@ -247,7 +371,7 @@ class _EcfCertificateDialogState extends State<EcfCertificateDialog> {
   @override
   Widget build(BuildContext context) {
     final d = widget.draft;
-    final ready = _file != null && _password.text.isNotEmpty;
+    final ready = _useSaved || (_file != null && _password.text.isNotEmpty);
     return AlertDialog(
       title: const Text('Dar de alta en Alanube'),
       content: SizedBox(
@@ -260,8 +384,7 @@ class _EcfCertificateDialogState extends State<EcfCertificateDialog> {
               EcfNote(
                 color: widget.isProduction ? AppColors.warning : AppColors.mutedForeground,
                 text: '${widget.isProduction ? 'Esto crea la empresa en Alanube PRODUCCIÓN' : 'Esto crea la empresa en Alanube (sandbox)'} '
-                    'dentro de la cuenta de MangoPOS. El certificado y la '
-                    'contraseña van directo a Alanube: MangoPOS no los guarda.',
+                    'dentro de la cuenta de MangoPOS con el certificado del contribuyente.',
               ),
               const SizedBox(height: 14),
               EcfLine('Razón social', d.legalName ?? '—'),
@@ -269,29 +392,40 @@ class _EcfCertificateDialogState extends State<EcfCertificateDialog> {
               EcfLine('Dirección fiscal', d.fiscalAddress ?? '—'),
               if (d.email != null) EcfLine('Correo', d.email!),
               const SizedBox(height: 14),
-              OutlinedButton.icon(
-                onPressed: _pick,
-                icon: const Icon(HugeIcons.strokeRoundedFileUpload, size: 15),
-                label: Text(_file == null ? 'Elegir certificado (.p12)' : _file!.filename),
-              ),
-              const SizedBox(height: 10),
-              TextField(
-                controller: _password,
-                obscureText: _obscure,
-                onChanged: (_) => setState(() {}),
-                decoration: InputDecoration(
-                  labelText: 'Contraseña del certificado',
-                  suffixIcon: IconButton(
-                    tooltip: _obscure ? 'Mostrar' : 'Ocultar',
-                    onPressed: () => setState(() => _obscure = !_obscure),
-                    icon: Icon(
-                      _obscure ? HugeIcons.strokeRoundedView : HugeIcons.strokeRoundedViewOff,
-                      size: 16,
+              if (widget.savedCertificateFilename != null)
+                _CertificateSourceSelector(
+                  filename: widget.savedCertificateFilename!,
+                  useSaved: _useSaved,
+                  onChanged: (value) => setState(() {
+                    _useSaved = value;
+                    _error = null;
+                  }),
+                ),
+              if (!_useSaved) ...[
+                OutlinedButton.icon(
+                  onPressed: _pick,
+                  icon: const Icon(HugeIcons.strokeRoundedFileUpload, size: 15),
+                  label: Text(_file == null ? 'Elegir certificado (.p12)' : _file!.filename),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: _password,
+                  obscureText: _obscure,
+                  onChanged: (_) => setState(() {}),
+                  decoration: InputDecoration(
+                    labelText: 'Contraseña del certificado',
+                    suffixIcon: IconButton(
+                      tooltip: _obscure ? 'Mostrar' : 'Ocultar',
+                      onPressed: () => setState(() => _obscure = !_obscure),
+                      icon: Icon(
+                        _obscure ? HugeIcons.strokeRoundedView : HugeIcons.strokeRoundedViewOff,
+                        size: 16,
+                      ),
                     ),
                   ),
                 ),
-              ),
-              const SizedBox(height: 8),
+                const SizedBox(height: 8),
+              ],
               const Text(
                 'El certificado tiene que estar a nombre del contribuyente o de '
                 'su representante autorizado ante la DGII. El de MangoPOS no sirve.',
@@ -315,7 +449,7 @@ class _EcfCertificateDialogState extends State<EcfCertificateDialog> {
               ? null
               : () => Navigator.pop(
                     context,
-                    EcfCertificateInput(
+                    _useSaved ? const EcfCertificateInput.stored() : EcfCertificateInput(
                       filename: _file!.filename,
                       bytes: _file!.bytes,
                       password: _password.text,
@@ -334,14 +468,14 @@ class _EcfCertificateDialogState extends State<EcfCertificateDialog> {
 
 class EcfFindCompanyDialog extends StatefulWidget {
   const EcfFindCompanyDialog({
-    required this.businessId,
+    required this.owner,
     required this.rnc,
     required this.matches,
     this.searchError,
     super.key,
   });
 
-  final String businessId;
+  final EcfOwner owner;
   final String? rnc;
   final List<EcfCompany> matches;
   final String? searchError;
@@ -407,10 +541,11 @@ class _EcfFindCompanyDialogState extends State<EcfFindCompanyDialog> {
                       const SizedBox(height: 6),
                       Align(
                         alignment: Alignment.centerRight,
-                        child: c.assignedToBusinessId != null &&
-                                c.assignedToBusinessId != widget.businessId
-                            ? const Text(
-                                'Ya la usa otro negocio',
+                        child: c.takenByOtherThan(widget.owner)
+                            ? Text(
+                                c.assignedToBusinessId != null
+                                    ? 'Ya la usa un negocio de MangoPOS'
+                                    : 'Ya la usa una solicitud de otra app',
                                 style: TextStyle(fontSize: 12, color: AppColors.destructive),
                               )
                             : FilledButton(
@@ -951,19 +1086,25 @@ class EcfSignedDocumentDialog extends StatelessWidget {
   }
 }
 
-/// Certificado .p12 del contribuyente para firmar el set de pruebas. Viaja en
-/// la petición y el servidor no lo guarda.
+/// Elige el certificado recibido o un archivo .p12/.pfx del contribuyente.
 class EcfSigningCertificateDialog extends StatefulWidget {
   const EcfSigningCertificateDialog({
     required this.title,
     required this.intro,
     required this.confirmLabel,
+    this.savedCertificateFilename,
+    this.consentLabel,
     super.key,
   });
 
   final String title;
   final String intro;
   final String confirmLabel;
+  final String? savedCertificateFilename;
+
+  /// Si viene, hay que marcar esta casilla para confirmar (p. ej. que el
+  /// cliente autorizó guardar su certificado).
+  final String? consentLabel;
 
   @override
   State<EcfSigningCertificateDialog> createState() =>
@@ -972,6 +1113,8 @@ class EcfSigningCertificateDialog extends StatefulWidget {
 
 class _EcfSigningCertificateDialogState extends State<EcfSigningCertificateDialog> {
   final _password = TextEditingController();
+  late bool _useSaved = widget.savedCertificateFilename != null;
+  bool _consent = false;
   PickedImage? _file;
   bool _obscure = true;
   String? _error;
@@ -1005,7 +1148,8 @@ class _EcfSigningCertificateDialogState extends State<EcfSigningCertificateDialo
 
   @override
   Widget build(BuildContext context) {
-    final ready = _file != null && _password.text.isNotEmpty;
+    final ready = (_useSaved || (_file != null && _password.text.isNotEmpty)) &&
+        (widget.consentLabel == null || _consent);
     return AlertDialog(
       title: Text(widget.title),
       content: SizedBox(
@@ -1017,33 +1161,55 @@ class _EcfSigningCertificateDialogState extends State<EcfSigningCertificateDialo
             children: [
               EcfNote(color: AppColors.mutedForeground, text: widget.intro),
               const SizedBox(height: 14),
-              OutlinedButton.icon(
-                onPressed: _pick,
-                icon: const Icon(HugeIcons.strokeRoundedFileUpload, size: 15),
-                label: Text(_file == null ? 'Elegir certificado (.p12)' : _file!.filename),
-              ),
-              const SizedBox(height: 10),
-              TextField(
-                controller: _password,
-                obscureText: _obscure,
-                onChanged: (_) => setState(() {}),
-                decoration: InputDecoration(
-                  labelText: 'Contraseña del certificado',
-                  suffixIcon: IconButton(
-                    tooltip: _obscure ? 'Mostrar' : 'Ocultar',
-                    onPressed: () => setState(() => _obscure = !_obscure),
-                    icon: Icon(
-                      _obscure ? HugeIcons.strokeRoundedView : HugeIcons.strokeRoundedViewOff,
-                      size: 16,
+              if (widget.savedCertificateFilename != null)
+                _CertificateSourceSelector(
+                  filename: widget.savedCertificateFilename!,
+                  useSaved: _useSaved,
+                  onChanged: (value) => setState(() {
+                    _useSaved = value;
+                    _error = null;
+                  }),
+                ),
+              if (!_useSaved) ...[
+                OutlinedButton.icon(
+                  onPressed: _pick,
+                  icon: const Icon(HugeIcons.strokeRoundedFileUpload, size: 15),
+                  label: Text(_file == null ? 'Elegir certificado (.p12)' : _file!.filename),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: _password,
+                  obscureText: _obscure,
+                  onChanged: (_) => setState(() {}),
+                  decoration: InputDecoration(
+                    labelText: 'Contraseña del certificado',
+                    suffixIcon: IconButton(
+                      tooltip: _obscure ? 'Mostrar' : 'Ocultar',
+                      onPressed: () => setState(() => _obscure = !_obscure),
+                      icon: Icon(
+                        _obscure ? HugeIcons.strokeRoundedView : HugeIcons.strokeRoundedViewOff,
+                        size: 16,
+                      ),
                     ),
                   ),
                 ),
-              ),
-              const SizedBox(height: 8),
+                const SizedBox(height: 8),
+              ],
               const Text(
-                'El mismo certificado con que se firmó la postulación. MangoPOS no lo guarda.',
+                'Usa el certificado del contribuyente o de su representante autorizado ante la DGII.',
                 style: TextStyle(fontSize: 11.5, color: AppColors.mutedForeground),
               ),
+              if (widget.consentLabel != null) ...[
+                const SizedBox(height: 8),
+                CheckboxListTile(
+                  value: _consent,
+                  onChanged: (v) => setState(() => _consent = v ?? false),
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                  controlAffinity: ListTileControlAffinity.leading,
+                  title: Text(widget.consentLabel!, style: const TextStyle(fontSize: 12.5)),
+                ),
+              ],
               if (_error != null) ...[
                 const SizedBox(height: 10),
                 EcfNote(color: AppColors.destructive, text: _error!),
@@ -1062,7 +1228,7 @@ class _EcfSigningCertificateDialogState extends State<EcfSigningCertificateDialo
               ? null
               : () => Navigator.pop(
                     context,
-                    EcfCertificateInput(
+                    _useSaved ? const EcfCertificateInput.stored() : EcfCertificateInput(
                       filename: _file!.filename,
                       bytes: _file!.bytes,
                       password: _password.text,

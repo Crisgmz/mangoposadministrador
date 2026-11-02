@@ -84,5 +84,39 @@ void main() {
       expect(r.requestedAt?.year, 2026);
       expect(r.statusLabel, 'Nueva');
     });
+
+    test('lee los requisitos para la certificación manual', () {
+      final r = ExternalEcfRequest.fromJson(
+        _row({
+          'phone': '8095550000',
+          'legal_rep_name': 'Ana Pérez',
+          'branches': [
+            {'name': 'Principal', 'address': 'Calle Central 17B'},
+            {'name': 'Sin dirección', 'address': '  '},
+            {'address': 'Av. Duarte 4'},
+          ],
+          'ecf_types': ['E31', 'E32'],
+          'ofv_user': '131974602',
+        }),
+      );
+
+      expect(r.phone, '8095550000');
+      expect(r.legalRepName, 'Ana Pérez');
+      // Una sucursal sin dirección no le sirve a la DGII: no se muestra.
+      expect(r.branches.map((b) => b.label), [
+        'Principal — Calle Central 17B',
+        'Av. Duarte 4',
+      ]);
+      expect(r.ecfTypes, ['E31', 'E32']);
+      expect(r.ofvUser, '131974602');
+    });
+
+    test('una solicitud vieja sin requisitos no rompe la fila', () {
+      final r = ExternalEcfRequest.fromJson(_row({}));
+
+      expect(r.branches, isEmpty);
+      expect(r.ecfTypes, isEmpty);
+      expect(r.phone, isNull);
+    });
   });
 }

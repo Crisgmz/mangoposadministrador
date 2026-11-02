@@ -17,6 +17,8 @@ import '../../presentation/pending/pending_accounts_page.dart';
 import '../../presentation/plans/plans_page.dart';
 import '../../presentation/settings/settings_page.dart';
 import '../../presentation/tables/tables_health_page.dart';
+import '../../presentation/ecf_requests/ecf_requests_page.dart';
+import '../../presentation/ecf_requests/external_ecf_onboarding_page.dart';
 import '../../presentation/fiscal/fiscal_page.dart';
 import '../../presentation/login/change_password_page.dart';
 import '../../presentation/login/login_page.dart';
@@ -165,6 +167,21 @@ final routerProvider = Provider<GoRouter>((ref) {
           GoRoute(
             path: '/fiscal',
             builder: (_, _) => const ContentArea(child: FiscalPage()),
+          ),
+          GoRoute(
+            path: '/facturacion-electronica',
+            builder: (_, _) => const ContentArea(child: EcfRequestsPage()),
+            routes: [
+              // Alta e-CF de una empresa de otra app (Busi Pos Web).
+              GoRoute(
+                path: 'externa/:id',
+                builder: (_, state) => ContentArea(
+                  child: ExternalEcfOnboardingPage(
+                    requestId: state.pathParameters['id']!,
+                  ),
+                ),
+              ),
+            ],
           ),
           GoRoute(
             path: '/impresion',

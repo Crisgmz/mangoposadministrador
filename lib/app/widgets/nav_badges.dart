@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../data/repositories/dashboard_repository.dart';
+import '../../data/repositories/ecf_onboarding_repository.dart';
+import '../../data/repositories/external_ecf_requests_repository.dart';
 import '../../data/repositories/incidents_repository.dart';
 import '../../data/repositories/pending_accounts_repository.dart';
 import '../../domain/models/business_overview.dart';
@@ -10,7 +12,7 @@ import 'nav_items.dart';
 
 /// Resuelve el contador de un item de navegación.
 ///
-/// Un solo punto para los cuatro badges: sidebar y bottom nav leen de acá, así
+/// Un solo punto para los badges: sidebar y bottom nav leen de acá, así
 /// que no puede pasar que el móvil diga 3 incidentes y el escritorio 2.
 ///
 /// Devuelve `null` mientras el provider de origen carga o falla — el badge
@@ -34,6 +36,13 @@ final navBadgeCountProvider = Provider.family<int?, NavBadge>((ref, badge) {
           .length;
     case NavBadge.pending:
       return ref.watch(pendingAccountsCountProvider).valueOrNull;
+    case NavBadge.ecfRequests:
+      // Dos orígenes que cargan por separado: se cuenta lo que ya llegó, y
+      // nada (no un cero) si no llegó ninguno.
+      final pos = ref.watch(ecfRequestsProvider).valueOrNull?.where((r) => !r.isActive).length;
+      final external = ref.watch(externalEcfRequestsProvider).valueOrNull?.where((r) => r.isOpen).length;
+      if (pos == null && external == null) return null;
+      return (pos ?? 0) + (external ?? 0);
   }
 });
 

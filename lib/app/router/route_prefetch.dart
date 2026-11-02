@@ -4,6 +4,8 @@ import '../../data/repositories/billing_repository.dart';
 import '../../data/repositories/cash_health_repository.dart';
 import '../../data/repositories/company_settings_repository.dart';
 import '../../data/repositories/dashboard_repository.dart';
+import '../../data/repositories/ecf_onboarding_repository.dart';
+import '../../data/repositories/external_ecf_requests_repository.dart';
 import '../../data/repositories/fiscal_health_repository.dart';
 import '../../data/repositories/incidents_repository.dart';
 import '../../data/repositories/infrastructure_repository.dart';
@@ -58,6 +60,7 @@ void prefetchRoute(WidgetRef ref, String path) {
       printTopFailuresProvider,
     ],
     '/pendientes' => [pendingAccountsListProvider],
+    '/facturacion-electronica' => [ecfRequestsProvider, externalEcfRequestsProvider],
     '/facturacion' => [billingOverviewProvider, billingMetricsProvider],
     '/planes' => [plansListProvider],
     '/auditoria' => [criticalAuditLogsProvider(null)],

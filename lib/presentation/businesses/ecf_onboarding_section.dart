@@ -24,10 +24,16 @@ import 'ecf_onboarding_dialogs.dart';
 /// el set de pruebas que entrega la DGII (un Excel que se carga aquí, se firma
 /// con el certificado del cliente y se manda a su ambiente de certificación).
 /// Bajar y subir archivos en el portal de la DGII sigue siendo manual.
+///
+/// Una empresa de otra app (Busi Pos Web, [EcfOwner.external]) pasa por los
+/// mismos pasos 1 a 3. Sus secuencias y su activación las hace el cliente en
+/// su app —es la que emite y MangoPOS no escribe en su base—: los pasos 4 y 5
+/// solo le dicen al operador qué tiene que hacer el cliente.
 class EcfOnboardingSection extends ConsumerStatefulWidget {
-  const EcfOnboardingSection({required this.businessId, super.key});
+  const EcfOnboardingSection({required this.owner, super.key});
 
-  final String businessId;
+  /// Negocio de MangoPOS o empresa de otra app (Busi Pos Web).
+  final EcfOwner owner;
 
   @override
   ConsumerState<EcfOnboardingSection> createState() =>
@@ -44,12 +50,41 @@ class _EcfOnboardingSectionState extends ConsumerState<EcfOnboardingSection> {
   /// Datos de la postulación: no cambian en la sesión, se piden una vez.
   EcfPostulationInfo? _postulationInfo;
 
+  bool _revealingOfv = false;
+  int _ofvAccessVersion = 0;
+  DialogRoute<void>? _ofvCredentialsRoute;
+
+  void _forgetOfvAccess() {
+    _ofvAccessVersion++;
+    _revealingOfv = false;
+    final route = _ofvCredentialsRoute;
+    _ofvCredentialsRoute = null;
+    if (route != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (route.isActive) route.navigator?.removeRoute(route);
+      });
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant EcfOnboardingSection oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.owner != widget.owner) _forgetOfvAccess();
+  }
+
+  @override
+  void dispose() {
+    _forgetOfvAccess();
+    super.dispose();
+  }
+
   EcfOnboardingRepository get _repo =>
       ref.read(ecfOnboardingRepositoryProvider);
 
   void _refresh() {
+    _forgetOfvAccess();
     setState(() => _preflight = null);
-    ref.invalidate(ecfOnboardingStatusProvider(widget.businessId));
+    ref.invalidate(ecfOnboardingStatusProvider(widget.owner));
   }
 
   /// Corre [action] con el indicador de ocupado. Devuelve false si falló (el
@@ -131,10 +166,41 @@ class _EcfOnboardingSectionState extends ConsumerState<EcfOnboardingSection> {
   // Acciones
   // ---------------------------------------------------------------------------
 
+  Future<void> _showOfvPassword() async {
+    if (_revealingOfv || _ofvCredentialsRoute != null) return;
+    final owner = widget.owner;
+    final version = ++_ofvAccessVersion;
+    setState(() => _revealingOfv = true);
+    try {
+      final credentials = await _repo.revealOfvPassword(owner);
+      if (!mounted || version != _ofvAccessVersion || widget.owner != owner) return;
+      setState(() => _revealingOfv = false);
+      final route = DialogRoute<void>(
+        context: context,
+        builder: (_) => EcfOfvCredentialsDialog(credentials: credentials),
+      );
+      _ofvCredentialsRoute = route;
+      await Navigator.of(context).push(route);
+      if (identical(_ofvCredentialsRoute, route)) _ofvCredentialsRoute = null;
+    } catch (e) {
+      if (mounted && version == _ofvAccessVersion && widget.owner == owner) {
+        await _showError(e);
+      }
+    } finally {
+      if (mounted && version == _ofvAccessVersion) {
+        setState(() => _revealingOfv = false);
+      }
+    }
+  }
+
   Future<void> _editData(EcfOnboardingStatus s) async {
-    // Primera vez: se precarga con lo que la POS ya tiene.
+    // Primera vez: se precarga con lo que la POS ya tiene o, en una empresa
+    // externa, con lo que mandó su app.
+    final x = s.external;
     final initial = s.draft ??
-        EcfTaxpayerDraft(rnc: s.fiscal?.rnc, legalName: s.fiscal?.legalName);
+        (x != null
+            ? EcfTaxpayerDraft(rnc: x.rnc, legalName: x.legalName, tradeName: x.tradeName, email: x.email)
+            : EcfTaxpayerDraft(rnc: s.fiscal?.rnc, legalName: s.fiscal?.legalName));
     final result = await showDialog<EcfTaxpayerDraft>(
       context: context,
       builder: (_) => EcfTaxpayerDialog(
@@ -145,7 +211,7 @@ class _EcfOnboardingSectionState extends ConsumerState<EcfOnboardingSection> {
     if (result == null) return;
     await _run(
       'Guardando datos…',
-      () => _repo.saveData(widget.businessId, result),
+      () => _repo.saveData(widget.owner, result),
       success: 'Datos guardados.',
     );
   }
@@ -163,7 +229,7 @@ class _EcfOnboardingSectionState extends ConsumerState<EcfOnboardingSection> {
     if (!ok) return;
     await _run(
       'Copiando a la POS…',
-      () => _repo.syncFiscal(widget.businessId),
+      () => _repo.syncFiscal(widget.owner),
       success: 'RNC y razón social actualizados en la POS.',
     );
   }
@@ -173,7 +239,7 @@ class _EcfOnboardingSectionState extends ConsumerState<EcfOnboardingSection> {
     List<EcfCompany> matches = const [];
     String? error;
     try {
-      matches = await _repo.findCompany(widget.businessId);
+      matches = await _repo.findCompany(widget.owner);
     } catch (e) {
       error = e is EcfOnboardingException ? e.message : '$e';
     } finally {
@@ -183,7 +249,7 @@ class _EcfOnboardingSectionState extends ConsumerState<EcfOnboardingSection> {
     final id = await showDialog<String>(
       context: context,
       builder: (_) => EcfFindCompanyDialog(
-        businessId: widget.businessId,
+        owner: widget.owner,
         rnc: s.draft?.rnc ?? s.fiscal?.rnc,
         matches: matches,
         searchError: error,
@@ -192,29 +258,61 @@ class _EcfOnboardingSectionState extends ConsumerState<EcfOnboardingSection> {
     if (id == null) return;
     await _run(
       'Vinculando empresa…',
-      () => _repo.linkCompany(widget.businessId, id),
+      () => _repo.linkCompany(widget.owner, id),
       success: 'Empresa vinculada.',
     );
   }
 
   Future<void> _registerCompany(EcfOnboardingStatus s) async {
+    final owner = widget.owner;
     final input = await showDialog<EcfCertificateInput>(
       context: context,
       builder: (_) => EcfCertificateDialog(
         draft: s.draft!,
         isProduction: s.isProduction,
+        savedCertificateFilename: s.draft?.hasCertificate == true ? s.draft!.certificateFilename : null,
       ),
     );
-    if (input == null) return;
+    if (input == null || !mounted || widget.owner != owner) return;
     await _run(
       'Dando de alta en Alanube…',
       () => _repo.registerCompany(
-        businessId: widget.businessId,
+        owner: owner,
         certificateFilename: input.filename,
         certificateBytes: input.bytes,
         certificatePassword: input.password,
       ),
       success: 'Empresa creada en Alanube.',
+    );
+  }
+
+  Future<void> _saveCertificate() async {
+    final owner = widget.owner;
+    final input = await showDialog<EcfCertificateInput>(
+      context: context,
+      builder: (_) => EcfSigningCertificateDialog(
+        title: 'Guardar certificado digital',
+        intro: 'Carga el certificado del contribuyente para usarlo en su alta y '
+            'en las pruebas de facturación electrónica ante la DGII.'
+            '${owner.isExternal ? ' Su app no guarda el certificado: se guarda cifrado aquí, '
+                'solo si el cliente lo autorizó.' : ''}',
+        confirmLabel: 'Guardar certificado',
+        consentLabel: owner.isExternal
+            ? 'El cliente autorizó a MangoPOS a guardar su certificado para firmar sus pruebas.'
+            : null,
+      ),
+    );
+    if (input == null || !mounted || widget.owner != owner) return;
+    await _run(
+      'Guardando certificado…',
+      () => _repo.saveCertificate(
+        owner: owner,
+        certificateFilename: input.filename!,
+        certificateBytes: input.bytes!,
+        certificatePassword: input.password!,
+        clientAuthorizedStorage: owner.isExternal,
+      ),
+      success: 'Certificado guardado.',
     );
   }
 
@@ -230,7 +328,7 @@ class _EcfOnboardingSectionState extends ConsumerState<EcfOnboardingSection> {
     await _run(
       'Guardando secuencia…',
       () => _repo.saveSequence(
-        businessId: widget.businessId,
+        owner: widget.owner,
         ncfType: input.ncfType,
         rangeStart: input.rangeStart,
         rangeEnd: input.rangeEnd,
@@ -248,7 +346,7 @@ class _EcfOnboardingSectionState extends ConsumerState<EcfOnboardingSection> {
       'Verificando…',
       () async {
         result = await _repo.provision(
-          businessId: widget.businessId,
+          businessId: widget.owner.id,
           alanubeCompanyId: s.companyId!,
           dryRun: true,
         );
@@ -271,7 +369,7 @@ class _EcfOnboardingSectionState extends ConsumerState<EcfOnboardingSection> {
       'Activando…',
       () async {
         result = await _repo.provision(
-          businessId: widget.businessId,
+          businessId: widget.owner.id,
           alanubeCompanyId: s.companyId!,
           dryRun: false,
         );
@@ -305,7 +403,7 @@ class _EcfOnboardingSectionState extends ConsumerState<EcfOnboardingSection> {
     if (!confirmed) return;
     await _run(
       enable ? 'Encendiendo…' : 'Apagando…',
-      () => _repo.setEcfEnabled(widget.businessId, enable),
+      () => _repo.setEcfEnabled(widget.owner, enable),
       success: enable ? 'Modalidad e-CF encendida.' : 'Modalidad e-CF apagada.',
     );
   }
@@ -315,7 +413,7 @@ class _EcfOnboardingSectionState extends ConsumerState<EcfOnboardingSection> {
     EcfPostulationInfo? info;
     await _run(
       'Consultando a Alanube…',
-      () async => info = await _repo.postulationInfo(widget.businessId),
+      () async => info = await _repo.postulationInfo(widget.owner),
       refresh: false,
     );
     if (info != null && mounted) setState(() => _postulationInfo = info);
@@ -341,7 +439,7 @@ class _EcfOnboardingSectionState extends ConsumerState<EcfOnboardingSection> {
     final ok = await _run(
       'Firmando ${kind.label.toLowerCase()}…',
       () async => url = await _repo.signDocument(
-        businessId: widget.businessId,
+        owner: widget.owner,
         kind: kind,
         filename: file.filename,
         bytes: file.bytes,
@@ -391,7 +489,7 @@ class _EcfOnboardingSectionState extends ConsumerState<EcfOnboardingSection> {
     final ok = await _run(
       'Leyendo el archivo de la DGII…',
       () async => loaded = await _repo.importTestSet(
-        businessId: widget.businessId,
+        owner: widget.owner,
         setKind: kind,
         filename: file!.filename,
         bytes: file.bytes,
@@ -407,7 +505,8 @@ class _EcfOnboardingSectionState extends ConsumerState<EcfOnboardingSection> {
     ));
   }
 
-  Future<void> _sendTestSet(EcfTestSet t) async {
+  Future<void> _sendTestSet(EcfTestSet t, EcfOnboardingStatus status) async {
+    final owner = widget.owner;
     final approvals = t.isApprovals;
     final cert = await showDialog<EcfCertificateInput>(
       context: context,
@@ -422,9 +521,11 @@ class _EcfOnboardingSectionState extends ConsumerState<EcfOnboardingSection> {
                 'primero las facturas y al final las notas que las modifican. Puede tardar '
                 'unos minutos; no cierres esta página.',
         confirmLabel: 'Firmar y enviar',
+        savedCertificateFilename: status.draft?.hasCertificate == true
+            ? status.draft!.certificateFilename : null,
       ),
     );
-    if (cert == null || !mounted) return;
+    if (cert == null || !mounted || widget.owner != owner) return;
 
     setState(() => _busy = 'Firmando y enviando a la DGII…');
     String? notice;
@@ -433,10 +534,11 @@ class _EcfOnboardingSectionState extends ConsumerState<EcfOnboardingSection> {
     var renewedSession = false;
     try {
       for (var batch = 0; batch < _maxSendBatches; batch++) {
+        if (!mounted || widget.owner != owner) break;
         final EcfTestSetSendResult r;
         try {
           r = await _repo.sendTestSet(
-            businessId: widget.businessId,
+            owner: owner,
             setKind: t.kind,
             certificateFilename: cert.filename,
             certificateBytes: cert.bytes,
@@ -470,9 +572,9 @@ class _EcfOnboardingSectionState extends ConsumerState<EcfOnboardingSection> {
       if (mounted) await _showError(e);
     } finally {
       if (mounted) setState(() => _busy = null);
-      _refresh();
+      if (mounted && widget.owner == owner) _refresh();
     }
-    if (failed || !mounted) return;
+    if (failed || !mounted || widget.owner != owner) return;
     if (notice != null) {
       await _showError(notice);
     } else {
@@ -484,11 +586,12 @@ class _EcfOnboardingSectionState extends ConsumerState<EcfOnboardingSection> {
     }
   }
 
-  Future<void> _checkTestSet(String kind) async {
+  Future<void> _checkTestSet(String kind, EcfOnboardingStatus status) async {
+    final owner = widget.owner;
     setState(() => _busy = 'Consultando a la DGII…');
     try {
-      await _repo.checkTestSet(widget.businessId, setKind: kind);
-      _refresh();
+      await _repo.checkTestSet(owner, setKind: kind);
+      if (mounted && widget.owner == owner) _refresh();
       return;
     } on EcfOnboardingException catch (e) {
       if (e.code != 'dgii_session_expired') {
@@ -501,22 +604,24 @@ class _EcfOnboardingSectionState extends ConsumerState<EcfOnboardingSection> {
     } finally {
       if (mounted) setState(() => _busy = null);
     }
-    if (!mounted) return;
+    if (!mounted || widget.owner != owner) return;
     // La sesión con la DGII (una hora) venció: se abre otra con el certificado.
     final cert = await showDialog<EcfCertificateInput>(
       context: context,
-      builder: (_) => const EcfSigningCertificateDialog(
+      builder: (_) => EcfSigningCertificateDialog(
         title: 'Consultar a la DGII',
         intro: 'La sesión con la DGII del último envío venció (dura una hora). Elige el '
             'certificado del contribuyente para abrir otra y consultar.',
         confirmLabel: 'Consultar',
+        savedCertificateFilename: status.draft?.hasCertificate == true
+            ? status.draft!.certificateFilename : null,
       ),
     );
-    if (cert == null) return;
+    if (cert == null || !mounted || widget.owner != owner) return;
     await _run(
       'Consultando a la DGII…',
       () => _repo.checkTestSet(
-        widget.businessId,
+        owner,
         setKind: kind,
         certificateFilename: cert.filename,
         certificateBytes: cert.bytes,
@@ -527,7 +632,7 @@ class _EcfOnboardingSectionState extends ConsumerState<EcfOnboardingSection> {
 
   Future<void> _downloadTestCase(EcfTestCase c) async {
     try {
-      final file = await _repo.testCaseXml(widget.businessId, c.id);
+      final file = await _repo.testCaseXml(widget.owner, c.id);
       downloadTextFileFromWeb(file.xml, file.filename, mimeType: 'application/xml');
     } catch (e) {
       if (mounted) await _showError(e);
@@ -562,7 +667,7 @@ class _EcfOnboardingSectionState extends ConsumerState<EcfOnboardingSection> {
     EcfTestSet? built;
     final ok = await _run(
       'Generando los e-CF de la simulación…',
-      () async => built = await _repo.generateSimulationSet(widget.businessId, counts: counts),
+      () async => built = await _repo.generateSimulationSet(widget.owner, counts: counts),
     );
     if (!ok || built == null || !mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -573,7 +678,7 @@ class _EcfOnboardingSectionState extends ConsumerState<EcfOnboardingSection> {
   /// Representación impresa (PDF) de un e-CF ya firmado.
   Future<void> _printTestCase(EcfTestCase c) async {
     try {
-      final file = await _repo.testCaseXml(widget.businessId, c.id);
+      final file = await _repo.testCaseXml(widget.owner, c.id);
       final model = file.print;
       if (model == null) {
         throw const EcfOnboardingException('El servidor no devolvió los datos de la representación impresa.');
@@ -594,7 +699,7 @@ class _EcfOnboardingSectionState extends ConsumerState<EcfOnboardingSection> {
       for (final c in signed) {
         if (!mounted) return;
         setState(() => _busy = 'Generando representaciones impresas… ${done + 1} de ${signed.length}');
-        final file = await _repo.testCaseXml(widget.businessId, c.id);
+        final file = await _repo.testCaseXml(widget.owner, c.id);
         final model = file.print;
         if (model == null) {
           failure = '${c.encf}: el servidor no devolvió los datos de la representación impresa.';
@@ -636,15 +741,16 @@ class _EcfOnboardingSectionState extends ConsumerState<EcfOnboardingSection> {
       title: authorized ? 'Marcar como autorizado' : 'Quitar la marca',
       body: authorized
           ? 'Confirma que la DGII ya autorizó a ${s.businessName} como emisor '
-              'electrónico (o que ya lo estaba). Siguiente paso: cargar las '
-              'secuencias e-NCF que la DGII le asigne.'
+              'electrónico (o que ya lo estaba). Siguiente paso: '
+              '${s.isExternal ? 'el cliente carga en su app las secuencias e-NCF' : 'cargar las secuencias e-NCF'} '
+              'que la DGII le asigne.'
           : 'El paso de certificación vuelve a quedar pendiente.',
       confirmLabel: authorized ? 'Marcar' : 'Quitar',
     );
     if (!confirmed) return;
     await _run(
       'Guardando…',
-      () => _repo.setDgiiAuthorized(widget.businessId, authorized),
+      () => _repo.setDgiiAuthorized(widget.owner, authorized),
     );
   }
 
@@ -654,7 +760,7 @@ class _EcfOnboardingSectionState extends ConsumerState<EcfOnboardingSection> {
 
   @override
   Widget build(BuildContext context) {
-    final statusAsync = ref.watch(ecfOnboardingStatusProvider(widget.businessId));
+    final statusAsync = ref.watch(ecfOnboardingStatusProvider(widget.owner));
     final status = statusAsync.valueOrNull;
 
     return Column(
@@ -761,14 +867,14 @@ class _EcfOnboardingSectionState extends ConsumerState<EcfOnboardingSection> {
           number: 4,
           title: 'Secuencias e-NCF',
           current: step,
-          child: _sequencesStep(s, locked),
+          child: s.isExternal ? _externalSequencesStep(s) : _sequencesStep(s, locked),
         ),
         _StepCard(
           number: 5,
-          title: 'Verificar y activar',
+          title: s.isExternal ? 'Encender en su app' : 'Verificar y activar',
           current: step,
           isLast: true,
-          child: _activateStep(s, locked),
+          child: s.isExternal ? _externalActivateStep(s) : _activateStep(s, locked),
         ),
       ],
     );
@@ -777,9 +883,22 @@ class _EcfOnboardingSectionState extends ConsumerState<EcfOnboardingSection> {
   Widget _dataStep(EcfOnboardingStatus s, bool locked) {
     final d = s.draft;
     final df = DateFormat('d MMM yyyy, h:mm a', 'es');
+    final x = s.external;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        // Pedida desde su app: con quién coordinar y qué declaró.
+        if (x != null) ...[
+          EcfNote(
+            color: AppColors.primary,
+            text: 'Solicitud desde Busi Pos Web'
+                '${x.requestedAt != null ? ', ${df.format(x.requestedAt!.toLocal())}' : ''}. '
+                'Contacto: ${x.contactName ?? '—'}${x.contactPhone != null ? ' · ${x.contactPhone}' : ''}. '
+                '${x.ofvUser != null ? 'Usuario OFV: ${x.ofvUser} (la clave se le pide al cliente). ' : ''}'
+                '${x.alreadyAuthorized == true ? 'Dice que YA es emisor electrónico autorizado: confírmalo antes de certificar.' : 'Dice que todavía no es emisor electrónico.'}',
+          ),
+          const SizedBox(height: 10),
+        ],
         // Pedida por el cliente desde la POS: con quién coordinar y qué declaró.
         if (d?.requestedAt != null) ...[
           EcfNote(
@@ -792,9 +911,12 @@ class _EcfOnboardingSectionState extends ConsumerState<EcfOnboardingSection> {
         ],
         if (d == null)
           Text(
-            s.fiscal?.rnc?.isNotEmpty == true
-                ? 'Sin capturar. La POS tiene RNC ${s.fiscal!.rnc} · ${s.fiscal!.legalName ?? '—'}.'
-                : 'Sin capturar.',
+            x != null
+                ? 'Sin capturar. Su app mandó RNC ${x.rnc ?? '—'} · ${x.legalName ?? '—'}: '
+                    'complétalo con la dirección fiscal, provincia y municipio de la DGII.'
+                : s.fiscal?.rnc?.isNotEmpty == true
+                    ? 'Sin capturar. La POS tiene RNC ${s.fiscal!.rnc} · ${s.fiscal!.legalName ?? '—'}.'
+                    : 'Sin capturar.',
             style: const TextStyle(fontSize: 12.5, color: AppColors.mutedForeground),
           )
         else ...[
@@ -807,11 +929,31 @@ class _EcfOnboardingSectionState extends ConsumerState<EcfOnboardingSection> {
             [d.province, d.municipality].whereType<String>().join(' · ').ifEmpty('—'),
           ),
           EcfLine('Correo', d.email ?? '—'),
+          if (d.requestedAt != null || d.ofvUser != null || d.hasOfvPassword) ...[
+            const SizedBox(height: 12),
+            const Text(
+              'Acceso a la Oficina Virtual (DGII)',
+              style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 6),
+            EcfLine('Usuario OFV', d.ofvUser ?? 'No enviado'),
+            EcfLine('Contraseña OFV', d.hasOfvPassword ? 'Recibida' : 'No enviada'),
+            if (d.hasOfvPassword)
+              Align(
+                alignment: Alignment.centerLeft,
+                child: OutlinedButton.icon(
+                  onPressed: locked || _revealingOfv ? null : _showOfvPassword,
+                  icon: const Icon(HugeIcons.strokeRoundedView, size: 14),
+                  label: Text(_revealingOfv ? 'Consultando contraseña…' : 'Ver contraseña'),
+                ),
+              ),
+          ],
           if (s.businessAddress != null &&
               d.fiscalAddress != null &&
               s.businessAddress!.trim().toUpperCase() != d.fiscalAddress!.trim().toUpperCase())
             EcfLine('Dirección del local', s.businessAddress!, valueColor: AppColors.mutedForeground),
-          if (!s.fiscalInSync) ...[
+          // Una empresa externa no tiene POS de MangoPOS con qué comparar.
+          if (!s.isExternal && !s.fiscalInSync) ...[
             const SizedBox(height: 10),
             EcfNote(
               color: AppColors.warning,
@@ -821,6 +963,25 @@ class _EcfOnboardingSectionState extends ConsumerState<EcfOnboardingSection> {
             ),
           ],
         ],
+        const SizedBox(height: 12),
+        const Text(
+          'Certificado digital',
+          style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700),
+        ),
+        const SizedBox(height: 6),
+        if (d?.hasCertificate == true) ...[
+          EcfLine('Archivo recibido', d!.certificateFilename!),
+          EcfLine('Recibido el', df.format(d.certificateUpdatedAt!.toLocal())),
+        ] else
+          const EcfLine('Estado', 'No recibido'),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: OutlinedButton.icon(
+            onPressed: locked ? null : _saveCertificate,
+            icon: const Icon(HugeIcons.strokeRoundedFileUpload, size: 14),
+            label: Text(d?.hasCertificate == true ? 'Reemplazar certificado' : 'Cargar certificado'),
+          ),
+        ),
         const SizedBox(height: 10),
         Wrap(
           spacing: 8,
@@ -831,7 +992,7 @@ class _EcfOnboardingSectionState extends ConsumerState<EcfOnboardingSection> {
               icon: const Icon(HugeIcons.strokeRoundedEdit02, size: 14),
               label: Text(d == null ? 'Capturar datos' : 'Editar datos'),
             ),
-            if (d != null && !s.fiscalInSync && d.rnc != null && d.legalName != null)
+            if (!s.isExternal && d != null && !s.fiscalInSync && d.rnc != null && d.legalName != null)
               OutlinedButton(
                 onPressed: locked ? null : () => _syncFiscal(s),
                 child: const Text('Copiar a la POS'),
@@ -847,10 +1008,20 @@ class _EcfOnboardingSectionState extends ConsumerState<EcfOnboardingSection> {
     final df = DateFormat('d MMM yyyy', 'es');
 
     if (s.companyId == null) {
-      final rnc = s.draft?.rnc ?? s.fiscal?.rnc;
+      final rnc = s.draft?.rnc ?? s.fiscal?.rnc ?? s.external?.rnc;
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          if (s.isExternal) ...[
+            const EcfNote(
+              color: AppColors.accent,
+              text: 'Su app no la pudo registrar en Alanube: casi siempre es la contraseña '
+                  'del certificado o un archivo que no es el de firma. Lo mejor es que el '
+                  'cliente reenvíe desde su tarjeta ("Reenviar con otro certificado"). Si la '
+                  'vinculas o la das de alta aquí, después hay que enlazarla en su app.',
+            ),
+            const SizedBox(height: 10),
+          ],
           const Text(
             'Si el cliente ya existe en la cuenta de Alanube, vincúlalo. Si no, '
             'dalo de alta con su certificado .p12 y la contraseña.',
@@ -931,8 +1102,62 @@ class _EcfOnboardingSectionState extends ConsumerState<EcfOnboardingSection> {
                 ? 'Dada de alta desde el panel'
                 : 'Ya existía en Alanube',
             valueColor: AppColors.mutedForeground,
+          )
+        else if (s.isExternal)
+          const EcfLine('Origen', 'Registrada por su app (Busi Pos Web)', valueColor: AppColors.mutedForeground),
+        if (s.externalNeedsLink) ...[
+          const SizedBox(height: 8),
+          const EcfNote(
+            color: AppColors.warning,
+            text: 'Su app todavía no tiene este ID: sin él no puede emitir. Corre el SQL en el '
+                'SQL Editor de Busi Pos Web (no en el de MangoPOS).',
           ),
+          const SizedBox(height: 6),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: OutlinedButton.icon(
+              onPressed: () => _copyExternalLinkSql(s),
+              icon: const Icon(HugeIcons.strokeRoundedCopy01, size: 14),
+              label: const Text('Copiar SQL para Busi Pos Web'),
+            ),
+          ),
+        ],
       ],
+    );
+  }
+
+  /// Enlaza en Busi Pos Web la empresa que se vinculó o dio de alta aquí
+  /// (docs/ECF_SOLICITUDES_BUSI_POS_WEB.md → "Enlazar a mano"). MangoPOS no
+  /// escribe en esa base: lo corre el operador allá.
+  Future<void> _copyExternalLinkSql(EcfOnboardingStatus s) async {
+    final companyId = s.external!.externalId;
+    final ulid = s.companyId!;
+    final environment = s.isProduction ? 'production' : 'sandbox';
+    await Clipboard.setData(ClipboardData(text: externalLinkSql(companyId: companyId, ulid: ulid, environment: environment)));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('SQL copiado. Córrelo en el SQL Editor de Busi Pos Web.')),
+    );
+  }
+
+  Widget _externalSequencesStep(EcfOnboardingStatus s) {
+    return const Text(
+      'Las carga el cliente en Busi Pos Web: Configuración → Facturación electrónica → '
+      '"Cargar secuencia e-NCF", con el rango que le entregue la DGII en la Oficina Virtual. '
+      'Una por sucursal: dos sucursales con el mismo rango emitirían el mismo e-NCF. '
+      'MangoPOS no ve esas secuencias.',
+      style: TextStyle(fontSize: 12.5, color: AppColors.mutedForeground),
+    );
+  }
+
+  Widget _externalActivateStep(EcfOnboardingStatus s) {
+    return Text(
+      '${s.externalNeedsLink ? 'Primero enlaza la empresa en su app (paso 2). ' : ''}'
+      'Con la secuencia cargada, el cliente toca "Encender facturación electrónica" en la '
+      'misma tarjeta; al encender, su app compara el RNC con el de la empresa en Alanube. '
+      'Pídele una venta de prueba pequeña en E32 y, si la DGII la acepta, marca la '
+      'solicitud como Atendida.',
+      style: const TextStyle(fontSize: 12.5, color: AppColors.mutedForeground),
     );
   }
 
@@ -1004,14 +1229,14 @@ class _EcfOnboardingSectionState extends ConsumerState<EcfOnboardingSection> {
               ? AppColors.destructive
               : null,
           done: t?.isComplete ?? false,
-          action: _testSetActions(t, 'ecf', locked),
+          action: _testSetActions(t, 'ecf', locked, status: s),
         ),
         _SubStep(
           label: 'Pruebas de aprobación comercial',
           detail: _approvalSetDetail(s.approvalSet),
           detailColor: (s.approvalSet?.failed.isNotEmpty ?? false) ? AppColors.destructive : null,
           done: s.approvalSet?.isComplete ?? false,
-          action: _testSetActions(s.approvalSet, 'acecf', locked),
+          action: _testSetActions(s.approvalSet, 'acecf', locked, status: s),
         ),
         _SubStep(
           label: 'Pruebas de simulación e-CF',
@@ -1058,7 +1283,7 @@ class _EcfOnboardingSectionState extends ConsumerState<EcfOnboardingSection> {
 
   /// Botones de un set de la DGII: enviar, consultar, ver y cargar (o, en la
   /// simulación, generar y bajar las representaciones impresas).
-  Widget _testSetActions(EcfTestSet? t, String kind, bool locked, {EcfOnboardingStatus? status}) {
+  Widget _testSetActions(EcfTestSet? t, String kind, bool locked, {required EcfOnboardingStatus status}) {
     final simulation = kind == 'sim';
     return Wrap(
       spacing: 6,
@@ -1067,14 +1292,14 @@ class _EcfOnboardingSectionState extends ConsumerState<EcfOnboardingSection> {
       children: [
         if (t != null && t.canSend)
           FilledButton(
-            onPressed: locked ? null : () => _sendTestSet(t),
+            onPressed: locked ? null : () => _sendTestSet(t, status),
             child: Text(
               t.cases.every((c) => c.status == 'pending') ? 'Enviar a la DGII' : 'Continuar envío',
             ),
           ),
         if (t != null && t.canCheck)
           OutlinedButton(
-            onPressed: locked ? null : () => _checkTestSet(kind),
+            onPressed: locked ? null : () => _checkTestSet(kind, status),
             child: const Text('Consultar'),
           ),
         if (t != null && !t.isEmpty)
@@ -1089,7 +1314,7 @@ class _EcfOnboardingSectionState extends ConsumerState<EcfOnboardingSection> {
           ),
         if (simulation)
           OutlinedButton(
-            onPressed: locked ? null : () => _generateSimulation(status!),
+            onPressed: locked ? null : () => _generateSimulation(status),
             child: Text(t == null || t.isEmpty ? 'Generar comprobantes' : 'Generar de nuevo'),
           )
         else
@@ -1332,6 +1557,27 @@ class _EcfOnboardingSectionState extends ConsumerState<EcfOnboardingSection> {
       ],
     );
   }
+}
+
+/// SQL que enlaza en Busi Pos Web una empresa de Alanube vinculada o dada de
+/// alta desde el panel: lo mismo que "Enlazar a mano" en
+/// docs/ECF_SOLICITUDES_BUSI_POS_WEB.md. [companyId] es el id de la empresa
+/// allá (`external_id` de la solicitud).
+String externalLinkSql({required String companyId, required String ulid, required String environment}) {
+  String lit(String v) => "'${v.replaceAll("'", "''")}'";
+  return '''
+update public.ecf_onboarding
+   set alanube_company_id = ${lit(ulid)},
+       company_linked_via = 'existing',
+       company_linked_at  = now()
+ where company_id = ${lit(companyId)};
+
+insert into public.company_ecf_settings (company_id, alanube_company_id, environment)
+values (${lit(companyId)}, ${lit(ulid)}, ${lit(environment)})
+on conflict (company_id) do update
+  set alanube_company_id = excluded.alanube_company_id,
+      environment        = excluded.environment;
+''';
 }
 
 // ---------------------------------------------------------------------------

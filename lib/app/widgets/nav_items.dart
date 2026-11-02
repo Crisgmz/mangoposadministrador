@@ -43,6 +43,10 @@ enum NavBadge {
 
   /// Cuentas por aprobar.
   pending,
+
+  /// Solicitudes de facturación electrónica sin terminar (MangoPOS y Busi Pos
+  /// Web).
+  ecfRequests,
 }
 
 /// Definición de un item de navegación de la consola.
@@ -152,6 +156,15 @@ const List<NavItem> kNavItems = [
     icon: HugeIcons.strokeRoundedClock04,
     section: NavSection.comercial,
     badge: NavBadge.pending,
+    showInBottomNav: false,
+  ),
+  NavItem(
+    path: '/facturacion-electronica',
+    label: 'Facturación electrónica',
+    shortLabel: 'e-CF',
+    icon: HugeIcons.strokeRoundedFileValidation,
+    section: NavSection.comercial,
+    badge: NavBadge.ecfRequests,
     showInBottomNav: false,
   ),
   NavItem(

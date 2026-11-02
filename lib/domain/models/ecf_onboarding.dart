@@ -5,6 +5,36 @@
 /// `status`) y del preflight de `provision-ecf`, ambas en el repo mangospos.
 /// Las reglas (validaciones, RNC contra Alanube, secuencias) viven en el
 /// servidor: acá solo se presenta y se deriva en qué paso va.
+library;
+
+import 'external_ecf_request.dart';
+
+/// De quién es el alta e-CF: un negocio de MangoPOS o una empresa de otra app
+/// (Busi Pos Web) que llegó como solicitud externa. Las dos pasan por la misma
+/// certificación ante la DGII; las secuencias y la activación de una externa
+/// las hace el cliente en su app.
+class EcfOwner {
+  const EcfOwner.business(this.id) : isExternal = false;
+  const EcfOwner.external(this.id) : isExternal = true;
+
+  final String id;
+  final bool isExternal;
+
+  /// Cómo lo identifica `ecf-onboarding`.
+  Map<String, String> toJson() =>
+      {isExternal ? 'external_request_id' : 'business_id': id};
+
+  @override
+  bool operator ==(Object other) =>
+      other is EcfOwner && other.id == id && other.isExternal == isExternal;
+
+  @override
+  int get hashCode => Object.hash(id, isExternal);
+
+  @override
+  String toString() => '${isExternal ? 'external' : 'business'}:$id';
+}
+
 class EcfOnboardingStatus {
   const EcfOnboardingStatus({
     required this.businessId,
@@ -12,6 +42,7 @@ class EcfOnboardingStatus {
     required this.environment,
     required this.sequences,
     this.businessAddress,
+    this.external,
     this.draft,
     this.fiscal,
     this.rncInSync,
@@ -29,6 +60,12 @@ class EcfOnboardingStatus {
 
   /// Dirección del local (`businesses.address`), la que sale en el ticket.
   final String? businessAddress;
+
+  /// La solicitud de otra app, cuando el alta es de una empresa externa. Sin
+  /// negocio, fiscal, secuencias ni activación en esta base.
+  final ExternalEcfRequest? external;
+
+  bool get isExternal => external != null;
 
   /// `production | sandbox` — sale de ALANUBE_BASE_URL, global al servidor.
   final String environment;
@@ -66,9 +103,15 @@ class EcfOnboardingStatus {
   bool get isProduction => environment == 'production';
 
   /// ULID de la empresa: del borrador o, en negocios activados antes del
-  /// panel (Tropella), de la configuración de Alanube.
+  /// panel (Tropella), de la configuración de Alanube. Una empresa externa la
+  /// suele registrar su app al pedir la facturación electrónica.
   String? get companyId =>
-      draft?.alanubeCompanyId ?? settings?.alanubeCompanyId;
+      draft?.alanubeCompanyId ?? settings?.alanubeCompanyId ?? external?.alanubeCompanyId;
+
+  /// Empresa externa cuyo ID de Alanube salió de aquí (vinculada o dada de
+  /// alta en el panel) y su app no lo tiene: hay que enlazarlo allá.
+  bool get externalNeedsLink =>
+      isExternal && companyId != null && external!.alanubeCompanyId != companyId;
 
   bool get fiscalInSync => rncInSync == true && legalNameInSync == true;
 
@@ -96,6 +139,8 @@ class EcfOnboardingStatus {
 
   factory EcfOnboardingStatus.fromJson(Map<String, dynamic> json) {
     final business = _map(json['business']) ?? const {};
+    final externalJson = _map(json['external_request']);
+    final external = externalJson == null ? null : ExternalEcfRequest.fromJson(externalJson);
     final sync = _map(json['fiscal_sync']);
     final draft = _map(json['onboarding']);
     final fiscal = _map(json['fiscal']);
@@ -106,8 +151,9 @@ class EcfOnboardingStatus {
     final simulationSet = _map(json['simulation_set']);
     return EcfOnboardingStatus(
       businessId: (business['id'] as String?) ?? '',
-      businessName: (business['business_name'] as String?) ?? '',
+      businessName: (business['business_name'] as String?) ?? external?.displayName ?? '',
       businessAddress: business['address'] as String?,
+      external: external,
       environment: (json['environment'] as String?) ?? 'production',
       draft: draft == null ? null : EcfTaxpayerDraft.fromJson(draft),
       fiscal: fiscal == null ? null : EcfFiscalSettings.fromJson(fiscal),
@@ -147,6 +193,10 @@ class EcfTaxpayerDraft {
     this.contactName,
     this.contactPhone,
     this.alreadyAuthorized,
+    this.ofvUser,
+    this.ofvPasswordUpdatedAt,
+    this.certificateFilename,
+    this.certificateUpdatedAt,
   });
 
   final String? rnc;
@@ -179,6 +229,20 @@ class EcfTaxpayerDraft {
   /// Lo que declaró el cliente: ya es emisor electrónico autorizado.
   final bool? alreadyAuthorized;
 
+  /// Acceso a la Oficina Virtual de la DGII enviado con la solicitud.
+  /// La contraseña se consulta por separado y no forma parte del estado.
+  final String? ofvUser;
+  final DateTime? ofvPasswordUpdatedAt;
+
+  bool get hasOfvPassword => ofvPasswordUpdatedAt != null;
+
+  /// Solo metadatos: el archivo y su clave permanecen cifrados en el servidor.
+  final String? certificateFilename;
+  final DateTime? certificateUpdatedAt;
+
+  bool get hasCertificate =>
+      _filled(certificateFilename) && certificateUpdatedAt != null;
+
   /// Lo mínimo que exige `POST /company` de Alanube.
   bool get isCompleteForRegistration =>
       _filled(rnc) && _filled(legalName) && _filled(fiscalAddress);
@@ -203,6 +267,10 @@ class EcfTaxpayerDraft {
       contactName: json['contact_name'] as String?,
       contactPhone: json['contact_phone'] as String?,
       alreadyAuthorized: json['already_authorized'] as bool?,
+      ofvUser: json['ofv_user'] as String?,
+      ofvPasswordUpdatedAt: _date(json['ofv_password_updated_at']),
+      certificateFilename: json['certificate_filename'] as String?,
+      certificateUpdatedAt: _date(json['certificate_updated_at']),
     );
   }
 
@@ -215,6 +283,15 @@ class EcfTaxpayerDraft {
         'municipality': municipality,
         'email': email,
       };
+}
+
+/// Acceso devuelto solo al consultar la clave, con autorización y auditoría
+/// del servidor. No se guarda en el borrador ni en los proveedores de estado.
+class EcfOfvCredentials {
+  const EcfOfvCredentials({required this.ofvPassword, this.ofvUser});
+
+  final String? ofvUser;
+  final String ofvPassword;
 }
 
 class EcfFiscalSettings {
@@ -344,6 +421,7 @@ class EcfCompany {
     this.certificateEndDate,
     this.webhooksOk,
     this.assignedToBusinessId,
+    this.assignedToExternalRequestId,
     this.receptionUrl,
     this.approvalUrl,
     this.authenticationUrl,
@@ -369,6 +447,18 @@ class EcfCompany {
 
   /// En la búsqueda: negocio de MangoPOS que ya usa esta empresa.
   final String? assignedToBusinessId;
+
+  /// En la búsqueda: solicitud de otra app que ya usa esta empresa.
+  final String? assignedToExternalRequestId;
+
+  /// La usa alguien que no es [owner]: vincularla firmaría con su certificado.
+  bool takenByOtherThan(EcfOwner owner) {
+    final business = assignedToBusinessId;
+    final external = assignedToExternalRequestId;
+    if (business != null) return owner != EcfOwner.business(business);
+    if (external != null) return owner != EcfOwner.external(external);
+    return false;
+  }
 
   /// URLs que se registran en la postulación de la DGII.
   final String? receptionUrl;
@@ -396,6 +486,7 @@ class EcfCompany {
       certificateEndDate: _date(cert?['end_date']),
       webhooksOk: json['webhooks_ok'] as bool?,
       assignedToBusinessId: json['assigned_to_business_id'] as String?,
+      assignedToExternalRequestId: json['assigned_to_external_request_id'] as String?,
       receptionUrl: urls?['reception'] as String?,
       approvalUrl: urls?['approval'] as String?,
       authenticationUrl: urls?['authentication'] as String?,

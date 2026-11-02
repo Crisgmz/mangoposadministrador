@@ -7,8 +7,9 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../core/network/supabase_client.dart';
 import '../../domain/models/ecf_onboarding.dart';
 
-/// Alta de facturación electrónica por negocio. Todo pasa por dos Edge
-/// Functions del repo mangospos:
+/// Alta de facturación electrónica de un [EcfOwner]: un negocio de MangoPOS o
+/// una empresa de otra app (Busi Pos Web). Todo pasa por dos Edge Functions
+/// del repo mangospos:
 ///   - `ecf-onboarding`: datos, empresa en Alanube, secuencias y modalidad.
 ///     Valida `is_platform_operator()` y audita en `noc_audit_log`.
 ///   - `provision-ecf`: preflight y activación (`business_alanube_settings`).
@@ -17,50 +18,87 @@ class EcfOnboardingRepository {
 
   final SupabaseClient _client;
 
-  Future<EcfOnboardingStatus> status(String businessId) async {
-    final data = await _onboarding('status', businessId);
+  Future<EcfOnboardingStatus> status(EcfOwner owner) async {
+    final data = await _onboarding('status', owner);
     return EcfOnboardingStatus.fromJson(data);
   }
 
-  Future<void> saveData(String businessId, EcfTaxpayerDraft draft) async {
-    await _onboarding('save_data', businessId, {'data': draft.toJson()});
+  Future<void> saveData(EcfOwner owner, EcfTaxpayerDraft draft) async {
+    await _onboarding('save_data', owner, {'data': draft.toJson()});
+  }
+
+  /// Consulta auditada, exclusiva de operadores. La clave no se carga al
+  /// listar solicitudes ni al leer su estado, y se conserva sin recortarla.
+  Future<EcfOfvCredentials> revealOfvPassword(EcfOwner owner) async {
+    final data = await _onboarding('reveal_ofv_password', owner);
+    final password = data['ofv_password'];
+    if (password is! String || password.isEmpty) {
+      throw const EcfOnboardingException(
+        'El servidor no devolvió la contraseña de la Oficina Virtual.',
+      );
+    }
+    return EcfOfvCredentials(
+      ofvUser: data['ofv_user'] as String?,
+      ofvPassword: password,
+    );
   }
 
   /// Copia RNC y razón social del borrador a `fiscal_settings` (lo que usa la
   /// POS y lo que compara el preflight).
-  Future<void> syncFiscal(String businessId) async {
-    await _onboarding('sync_fiscal', businessId);
+  Future<void> syncFiscal(EcfOwner owner) async {
+    await _onboarding('sync_fiscal', owner);
   }
 
   /// Empresas asociadas en Alanube con el RNC del negocio.
-  Future<List<EcfCompany>> findCompany(String businessId) async {
-    final data = await _onboarding('find_company', businessId);
+  Future<List<EcfCompany>> findCompany(EcfOwner owner) async {
+    final data = await _onboarding('find_company', owner);
     return ((data['matches'] as List?) ?? const [])
         .whereType<Map>()
         .map((e) => EcfCompany.fromJson(Map<String, dynamic>.from(e)))
         .toList(growable: false);
   }
 
-  Future<void> linkCompany(String businessId, String alanubeCompanyId) async {
-    await _onboarding('link_company', businessId, {
+  Future<void> linkCompany(EcfOwner owner, String alanubeCompanyId) async {
+    await _onboarding('link_company', owner, {
       'alanube_company_id': alanubeCompanyId,
     });
   }
 
-  /// Da de alta la empresa en Alanube. El certificado y la contraseña viajan
-  /// solo en esta petición: el servidor no los guarda.
-  Future<EcfCompany?> registerCompany({
-    required String businessId,
+  /// Carga o reemplaza el certificado cifrado para las firmas del negocio.
+  /// En una empresa externa el servidor exige [clientAuthorizedStorage]: su
+  /// app no le pidió al cliente permiso para guardarlo.
+  Future<void> saveCertificate({
+    required EcfOwner owner,
     required String certificateFilename,
     required Uint8List certificateBytes,
     required String certificatePassword,
+    bool clientAuthorizedStorage = false,
   }) async {
-    final data = await _onboarding('register_company', businessId, {
-      'certificate': {
-        'filename': certificateFilename,
-        'content_base64': base64Encode(certificateBytes),
-        'password': certificatePassword,
-      },
+    await _onboarding('save_certificate', owner, {
+      'certificate': _certificatePayload(
+        certificateFilename,
+        certificateBytes,
+        certificatePassword,
+      ),
+      if (clientAuthorizedStorage) 'accept_certificate_storage': true,
+    });
+  }
+
+  /// Da de alta la empresa en Alanube. Sin archivo explícito, el servidor
+  /// usa el certificado guardado con la solicitud.
+  Future<EcfCompany?> registerCompany({
+    required EcfOwner owner,
+    String? certificateFilename,
+    Uint8List? certificateBytes,
+    String? certificatePassword,
+  }) async {
+    final certificate = _certificatePayload(
+      certificateFilename,
+      certificateBytes,
+      certificatePassword,
+    );
+    final data = await _onboarding('register_company', owner, {
+      'certificate': ?certificate,
     });
     final company = data['company'];
     return company is Map
@@ -69,7 +107,7 @@ class EcfOnboardingRepository {
   }
 
   Future<void> saveSequence({
-    required String businessId,
+    required EcfOwner owner,
     required String ncfType,
     required int rangeStart,
     required int rangeEnd,
@@ -77,7 +115,7 @@ class EcfOnboardingRepository {
     String? authorizationNumber,
     int? lastUsed,
   }) async {
-    await _onboarding('save_sequence', businessId, {
+    await _onboarding('save_sequence', owner, {
       'sequence': {
         'ncf_type': ncfType,
         'range_start': rangeStart,
@@ -93,8 +131,8 @@ class EcfOnboardingRepository {
     });
   }
 
-  Future<void> setEcfEnabled(String businessId, bool enabled) async {
-    await _onboarding('set_ecf_enabled', businessId, {'enabled': enabled});
+  Future<void> setEcfEnabled(EcfOwner owner, bool enabled) async {
+    await _onboarding('set_ecf_enabled', owner, {'enabled': enabled});
   }
 
   /// Solicitudes que hicieron los clientes desde la POS, las más nuevas primero.
@@ -115,20 +153,20 @@ class EcfOnboardingRepository {
 
   // ---- Certificación ante la DGII ----------------------------------------
 
-  Future<EcfPostulationInfo> postulationInfo(String businessId) async {
-    final data = await _onboarding('postulation_info', businessId);
+  Future<EcfPostulationInfo> postulationInfo(EcfOwner owner) async {
+    final data = await _onboarding('postulation_info', owner);
     return EcfPostulationInfo.fromJson(data);
   }
 
   /// Alanube firma el XML con el certificado de la empresa y devuelve el
   /// enlace del XML firmado, que es lo que se sube a la OFV.
   Future<String> signDocument({
-    required String businessId,
+    required EcfOwner owner,
     required EcfSignKind kind,
     required String filename,
     required Uint8List bytes,
   }) async {
-    final data = await _onboarding('sign_document', businessId, {
+    final data = await _onboarding('sign_document', owner, {
       'kind': kind.code,
       'xml': {'filename': filename, 'content_base64': base64Encode(bytes)},
     });
@@ -144,34 +182,35 @@ class EcfOnboardingRepository {
   /// Reemplaza el que hubiera de ese tipo; si el archivo es del otro, falla con
   /// `wrong_test_set`.
   Future<EcfTestSet> importTestSet({
-    required String businessId,
+    required EcfOwner owner,
     required String setKind,
     required String filename,
     required Uint8List bytes,
   }) async {
-    final data = await _onboarding('import_test_set', businessId, {
+    final data = await _onboarding('import_test_set', owner, {
       'set_kind': setKind,
       'file': {'filename': filename, 'content_base64': base64Encode(bytes)},
     });
     return EcfTestSet.fromJson(_asMap(data['test_set']));
   }
 
-  /// Un lote del envío a la DGII. El certificado viaja en cada lote y el
-  /// servidor no lo guarda; si responde `more`, hay que volver a llamar.
+  /// Un lote del envío a la DGII. Sin archivo explícito se firma con el
+  /// certificado de la solicitud; si responde `more`, hay que volver a llamar.
   Future<EcfTestSetSendResult> sendTestSet({
-    required String businessId,
+    required EcfOwner owner,
     required String setKind,
-    required String certificateFilename,
-    required Uint8List certificateBytes,
-    required String certificatePassword,
+    String? certificateFilename,
+    Uint8List? certificateBytes,
+    String? certificatePassword,
   }) async {
-    final data = await _onboarding('send_test_set', businessId, {
+    final certificate = _certificatePayload(
+      certificateFilename,
+      certificateBytes,
+      certificatePassword,
+    );
+    final data = await _onboarding('send_test_set', owner, {
       'set_kind': setKind,
-      'certificate': {
-        'filename': certificateFilename,
-        'content_base64': base64Encode(certificateBytes),
-        'password': certificatePassword,
-      },
+      'certificate': ?certificate,
     });
     return EcfTestSetSendResult.fromJson(data);
   }
@@ -182,31 +221,31 @@ class EcfOnboardingRepository {
   /// El modelo lo resuelve el servidor (set de este negocio, de otra sucursal
   /// con el mismo RNC, o el genérico de la DGII).
   Future<EcfTestSet> generateSimulationSet(
-    String businessId, {
+    EcfOwner owner, {
     required Map<String, int> counts,
   }) async {
-    final data = await _onboarding('generate_simulation_set', businessId, {'counts': counts});
+    final data = await _onboarding('generate_simulation_set', owner, {'counts': counts});
     return EcfTestSet.fromJson(_asMap(data['test_set']));
   }
 
   /// Consulta los envíos en proceso de un set (`ecf` o `sim`). Sin
   /// [certificate*] usa la sesión con la DGII del último envío; si venció,
-  /// falla con `dgii_session_expired`.
+  /// la renueva con el certificado guardado, cuando existe.
   Future<EcfTestSet> checkTestSet(
-    String businessId, {
+    EcfOwner owner, {
     String setKind = 'ecf',
     String? certificateFilename,
     Uint8List? certificateBytes,
     String? certificatePassword,
   }) async {
-    final data = await _onboarding('check_test_set', businessId, {
+    final certificate = _certificatePayload(
+      certificateFilename,
+      certificateBytes,
+      certificatePassword,
+    );
+    final data = await _onboarding('check_test_set', owner, {
       'set_kind': setKind,
-      if (certificateBytes != null)
-        'certificate': {
-          'filename': certificateFilename,
-          'content_base64': base64Encode(certificateBytes),
-          'password': certificatePassword,
-        },
+      'certificate': ?certificate,
     });
     return EcfTestSet.fromJson(_asMap(data['test_set']));
   }
@@ -214,10 +253,10 @@ class EcfOnboardingRepository {
   /// XML firmado de un caso, como se mandó a la DGII, y los datos de su
   /// representación impresa (null en las aprobaciones comerciales).
   Future<({String filename, String xml, EcfPrintModel? print})> testCaseXml(
-    String businessId,
+    EcfOwner owner,
     String caseId,
   ) async {
-    final data = await _onboarding('test_case_xml', businessId, {'case_id': caseId});
+    final data = await _onboarding('test_case_xml', owner, {'case_id': caseId});
     final xml = data['xml'];
     if (xml is! String || xml.isEmpty) {
       throw const EcfOnboardingException('El servidor no devolvió el XML.');
@@ -230,8 +269,8 @@ class EcfOnboardingRepository {
     );
   }
 
-  Future<void> setDgiiAuthorized(String businessId, bool authorized) async {
-    await _onboarding('set_dgii_authorized', businessId, {'authorized': authorized});
+  Future<void> setDgiiAuthorized(EcfOwner owner, bool authorized) async {
+    await _onboarding('set_dgii_authorized', owner, {'authorized': authorized});
   }
 
   /// Preflight de `provision-ecf`. Con [dryRun] en false, si no hay chequeos
@@ -261,13 +300,13 @@ class EcfOnboardingRepository {
 
   Future<Map<String, dynamic>> _onboarding(
     String action,
-    String businessId, [
+    EcfOwner owner, [
     Map<String, dynamic> params = const {},
   ]) async {
     try {
       final res = await _client.functions.invoke('ecf-onboarding', body: {
         'action': action,
-        'business_id': businessId,
+        ...owner.toJson(),
         ...params,
       });
       return _asMap(res.data);
@@ -283,6 +322,25 @@ class EcfOnboardingRepository {
       if (decoded is Map) return Map<String, dynamic>.from(decoded);
     }
     throw const EcfOnboardingException('Respuesta inesperada del servidor.');
+  }
+
+  static Map<String, dynamic>? _certificatePayload(
+    String? filename,
+    Uint8List? bytes,
+    String? password,
+  ) {
+    if (filename == null && bytes == null && password == null) return null;
+    if (filename == null || filename.isEmpty || bytes == null ||
+        bytes.isEmpty || password == null || password.isEmpty) {
+      throw const EcfOnboardingException(
+        'Elige el certificado e indica su contraseña.',
+      );
+    }
+    return {
+      'filename': filename,
+      'content_base64': base64Encode(bytes),
+      'password': password,
+    };
   }
 }
 
@@ -329,6 +387,6 @@ final ecfRequestsProvider = FutureProvider<List<EcfRequestSummary>>((ref) {
 });
 
 final ecfOnboardingStatusProvider =
-    FutureProvider.family<EcfOnboardingStatus, String>((ref, businessId) {
-  return ref.watch(ecfOnboardingRepositoryProvider).status(businessId);
+    FutureProvider.family<EcfOnboardingStatus, EcfOwner>((ref, owner) {
+  return ref.watch(ecfOnboardingRepositoryProvider).status(owner);
 });

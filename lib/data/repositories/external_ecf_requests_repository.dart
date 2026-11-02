@@ -20,6 +20,7 @@ class ExternalEcfRequestsRepository {
   static const _columns =
       'id, source, external_id, company_name, rnc, legal_name, trade_name, '
       'email, contact_name, contact_phone, already_authorized, '
+      'phone, legal_rep_name, branches, ecf_types, ofv_user, '
       'alanube_company_id, company_registered, requested_at, received_at, '
       'status, notes, handled_at';
 

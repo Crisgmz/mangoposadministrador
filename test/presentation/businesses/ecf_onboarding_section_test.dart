@@ -2,7 +2,10 @@
 // solo se habilita después de una verificación sin puntos en rojo — la
 // garantía de que el operador no activa a ciegas.
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hugeicons/hugeicons.dart';
@@ -11,6 +14,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:mangopos_administrador/data/repositories/ecf_onboarding_repository.dart';
 import 'package:mangopos_administrador/domain/models/ecf_onboarding.dart';
+import 'package:mangopos_administrador/presentation/businesses/ecf_onboarding_dialogs.dart';
 import 'package:mangopos_administrador/presentation/businesses/ecf_onboarding_section.dart';
 
 class _FakeRepo extends EcfOnboardingRepository {
@@ -26,9 +30,81 @@ class _FakeRepo extends EcfOnboardingRepository {
   final List<Map<String, dynamic>> checks;
   final provisions = <bool>[];
   final simulationCounts = <Map<String, int>>[];
+  final ofvReveals = <String>[];
+  Object? ofvError;
+  Completer<EcfOfvCredentials>? ofvResponse;
+  final registrations = <Map<String, dynamic>>[];
+  final certificateSaves = <Map<String, dynamic>>[];
+  final testSetSends = <Map<String, dynamic>>[];
+  Object? certificateSaveError;
 
   @override
-  Future<EcfTestSet> generateSimulationSet(String businessId, {required Map<String, int> counts}) async {
+  Future<EcfCompany?> registerCompany({
+    required EcfOwner owner,
+    String? certificateFilename,
+    Uint8List? certificateBytes,
+    String? certificatePassword,
+  }) async {
+    registrations.add({
+      'business_id': owner.id,
+      'filename': certificateFilename,
+      'bytes': certificateBytes,
+      'password': certificatePassword,
+    });
+    return null;
+  }
+
+  @override
+  Future<void> saveCertificate({
+    required EcfOwner owner,
+    required String certificateFilename,
+    required Uint8List certificateBytes,
+    required String certificatePassword,
+    bool clientAuthorizedStorage = false,
+  }) async {
+    if (certificateSaveError != null) throw certificateSaveError!;
+    certificateSaves.add({
+      'business_id': owner.id,
+      'owner': owner,
+      'authorized': clientAuthorizedStorage,
+      'filename': certificateFilename,
+      'bytes': certificateBytes,
+      'password': certificatePassword,
+    });
+  }
+
+  @override
+  Future<EcfTestSetSendResult> sendTestSet({
+    required EcfOwner owner,
+    required String setKind,
+    String? certificateFilename,
+    Uint8List? certificateBytes,
+    String? certificatePassword,
+  }) async {
+    testSetSends.add({
+      'business_id': owner.id,
+      'set_kind': setKind,
+      'filename': certificateFilename,
+      'bytes': certificateBytes,
+      'password': certificatePassword,
+    });
+    return EcfTestSetSendResult(
+      sent: 1,
+      more: false,
+      testSet: EcfTestSet(cases: const [], kind: setKind),
+    );
+  }
+
+  @override
+  Future<EcfOfvCredentials> revealOfvPassword(EcfOwner owner) async {
+    ofvReveals.add(owner.id);
+    if (ofvError != null) throw ofvError!;
+    if (ofvResponse != null) return ofvResponse!.future;
+    return const EcfOfvCredentials(ofvUser: 'usuario.prueba', ofvPassword: '  Clave de prueba #2026  ');
+  }
+
+  @override
+  Future<EcfTestSet> generateSimulationSet(EcfOwner owner, {required Map<String, int> counts}) async {
     simulationCounts.add(counts);
     return const EcfTestSet(cases: [], kind: 'sim');
   }
@@ -50,12 +126,18 @@ Map<String, dynamic> _json({
   List<Map<String, dynamic>> sequences = const [],
   Map<String, dynamic>? settings,
   Map<String, dynamic>? company,
+  Map<String, dynamic>? external,
 }) =>
     {
-      'business': {'id': 'b1', 'business_name': 'Tropella Coffee', 'address': 'Real Food Park'},
+      'business': external != null
+          ? null
+          : {'id': 'b1', 'business_name': 'Tropella Coffee', 'address': 'Real Food Park'},
+      'external_request': external,
       'onboarding': onboarding,
       'fiscal': fiscal,
-      'fiscal_sync': onboarding == null ? null : {'rnc_matches': false, 'legal_name_matches': true},
+      'fiscal_sync': onboarding == null || external != null
+          ? null
+          : {'rnc_matches': false, 'legal_name_matches': true},
       'sequences': sequences,
       'alanube_settings': settings,
       'company': company,
@@ -68,6 +150,7 @@ Future<_FakeRepo> _pump(
   Map<String, dynamic> status, {
   List<Map<String, dynamic>> checks = const [],
   double width = 1100,
+  EcfOwner owner = const EcfOwner.business('b1'),
 }) async {
   tester.view.physicalSize = Size(width, 2600);
   tester.view.devicePixelRatio = 1.0;
@@ -78,14 +161,14 @@ Future<_FakeRepo> _pump(
     ProviderScope(
       overrides: [
         ecfOnboardingRepositoryProvider.overrideWithValue(repo),
-        ecfOnboardingStatusProvider('b1').overrideWith(
+        ecfOnboardingStatusProvider(owner).overrideWith(
           (ref) async => EcfOnboardingStatus.fromJson(status),
         ),
       ],
-      child: const MaterialApp(
+      child: MaterialApp(
         home: Scaffold(
           body: SingleChildScrollView(
-            child: EcfOnboardingSection(businessId: 'b1'),
+            child: EcfOnboardingSection(owner: owner),
           ),
         ),
       ),
@@ -100,6 +183,20 @@ const _certifying = {
   'legal_name': 'NUEVO CLIENTE SRL',
   'fiscal_address': 'SANTIAGO',
   'alanube_company_id': '01M1',
+};
+
+const _requestedWithOfv = {
+  ..._certifying,
+  'requested_at': '2026-10-27T15:00:00Z',
+  'ofv_user': 'usuario.prueba',
+  'ofv_password_updated_at': '2026-10-27T15:00:00Z',
+};
+
+const _requestedWithCertificate = {
+  ..._certifying,
+  'requested_at': '2026-10-27T15:00:00Z',
+  'certificate_filename': 'cliente-prueba.p12',
+  'certificate_updated_at': '2026-10-27T15:00:00Z',
 };
 
 Map<String, dynamic> _case(
@@ -132,6 +229,230 @@ Map<String, dynamic> _testSet(List<Map<String, dynamic>> cases) => {
 
 void main() {
   setUpAll(() => initializeDateFormatting('es', null));
+
+  testWidgets('alta prefiere certificado recibido sin volver a pedir el archivo o la clave', (tester) async {
+    final repo = await _pump(tester, _json(onboarding: {
+      ..._requestedWithCertificate,
+      'alanube_company_id': null,
+    }), width: 480);
+    expect(find.text('cliente-prueba.p12'), findsOneWidget);
+    expect(find.text('Reemplazar certificado'), findsOneWidget);
+
+    await tester.tap(find.text('Dar de alta con certificado'));
+    await tester.pumpAndSettle();
+    expect(find.text('Usar certificado de la solicitud'), findsOneWidget);
+    expect(find.widgetWithText(TextField, 'Contraseña del certificado'), findsNothing);
+    await tester.tap(find.widgetWithText(FilledButton, 'Dar de alta'));
+    await tester.pumpAndSettle();
+
+    expect(repo.registrations, [{
+      'business_id': 'b1', 'filename': null, 'bytes': null, 'password': null,
+    }]);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('elegir otro certificado vuelve a pedir archivo y contraseña', (tester) async {
+    await _pump(tester, _json(onboarding: {
+      ..._requestedWithCertificate,
+      'alanube_company_id': null,
+    }));
+    await tester.tap(find.text('Dar de alta con certificado'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byType(DropdownButtonFormField<bool>));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Subir otro certificado').last);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Elegir certificado (.p12)'), findsOneWidget);
+    expect(find.widgetWithText(TextField, 'Contraseña del certificado'), findsOneWidget);
+    expect(tester.widget<FilledButton>(find.widgetWithText(FilledButton, 'Dar de alta')).onPressed, isNull);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('alta sin certificado recibido mantiene la subida manual', (tester) async {
+    await _pump(tester, _json(onboarding: {
+      ..._certifying,
+      'alanube_company_id': null,
+    }));
+    expect(find.text('No recibido'), findsOneWidget);
+    expect(find.text('Cargar certificado'), findsOneWidget);
+    await tester.tap(find.text('Dar de alta con certificado'));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(DropdownButtonFormField<bool>), findsNothing);
+    expect(find.text('Elegir certificado (.p12)'), findsOneWidget);
+    expect(tester.widget<FilledButton>(find.widgetWithText(FilledButton, 'Dar de alta')).onPressed, isNull);
+  });
+
+  for (final entry in {'ecf': 'test_set', 'acecf': 'approval_set', 'sim': 'simulation_set'}.entries) {
+    testWidgets('${entry.key}: firma con el certificado recibido sin reenviar bytes o contraseña', (tester) async {
+      final repo = await _pump(tester, {
+        ..._json(onboarding: _requestedWithCertificate),
+        entry.value: {
+          ..._testSet([_case('E310000000001', 'pending')]),
+          'kind': entry.key,
+        },
+      });
+      await tester.tap(find.text('Enviar a la DGII'));
+      await tester.pumpAndSettle();
+      expect(find.text('Usar certificado de la solicitud'), findsOneWidget);
+      expect(find.widgetWithText(TextField, 'Contraseña del certificado'), findsNothing);
+      await tester.tap(find.widgetWithText(FilledButton, 'Firmar y enviar'));
+      await tester.pumpAndSettle();
+
+      expect(repo.testSetSends, [{
+        'business_id': 'b1', 'set_kind': entry.key,
+        'filename': null, 'bytes': null, 'password': null,
+      }]);
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  testWidgets('negocio anterior puede guardar certificado sin crear otra empresa', (tester) async {
+    final repo = await _pump(tester, _json(
+      onboarding: _certifying,
+      fiscal: {'ecf_enabled': true},
+      settings: {'alanube_company_id': '01M1', 'mode': 'hybrid'},
+    ));
+    await tester.tap(find.text('Cargar certificado'));
+    await tester.pumpAndSettle();
+    expect(find.text('Guardar certificado digital'), findsOneWidget);
+    expect(find.text('Elegir certificado (.p12)'), findsOneWidget);
+    // El selector usa el navegador; acá simulamos el archivo elegido.
+    Navigator.of(tester.element(find.byType(EcfSigningCertificateDialog))).pop(
+      EcfCertificateInput(
+        filename: 'anterior.pfx',
+        bytes: Uint8List.fromList([1, 2, 3]),
+        password: '  clave de prueba  ',
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(repo.certificateSaves.single['filename'], 'anterior.pfx');
+    expect(repo.certificateSaves.single['bytes'], [1, 2, 3]);
+    expect(repo.certificateSaves.single['password'], '  clave de prueba  ');
+    expect(repo.registrations, isEmpty);
+    expect(find.text('Certificado guardado.'), findsOneWidget);
+  });
+
+  testWidgets('error al guardar certificado se muestra sin romper el alta', (tester) async {
+    final repo = await _pump(tester, _json(onboarding: _certifying));
+    repo.certificateSaveError = const EcfOnboardingException('El certificado no es válido.');
+    await tester.tap(find.text('Cargar certificado'));
+    await tester.pumpAndSettle();
+    Navigator.of(tester.element(find.byType(EcfSigningCertificateDialog))).pop(
+      EcfCertificateInput(
+        filename: 'invalido.p12',
+        bytes: Uint8List.fromList([0]),
+        password: 'prueba',
+      ),
+    );
+    // _run mantiene el indicador activo hasta cerrar el aviso de error.
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+
+    expect(find.text('El certificado no es válido.'), findsOneWidget);
+    expect(repo.certificateSaves, isEmpty);
+    await tester.tap(find.text('Entendido'));
+    await tester.pumpAndSettle();
+    expect(find.text('Cargar certificado'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('acceso OFV se consulta al pedirlo y se puede ocultar y copiar sin alterar la clave', (tester) async {
+    final copied = <String>[];
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(SystemChannels.platform, (call) async {
+      if (call.method == 'Clipboard.setData') {
+        copied.add((call.arguments as Map)['text'] as String);
+      }
+      return null;
+    });
+    addTearDown(() => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(SystemChannels.platform, null));
+    final repo = await _pump(tester, _json(onboarding: _requestedWithOfv));
+
+    expect(find.text('usuario.prueba'), findsOneWidget);
+    expect(find.text('Recibida'), findsOneWidget);
+    expect(repo.ofvReveals, isEmpty);
+    expect(find.text('  Clave de prueba #2026  '), findsNothing);
+
+    await tester.tap(find.text('Ver contraseña'));
+    await tester.pumpAndSettle();
+    expect(repo.ofvReveals, ['b1']);
+    expect(find.text('  Clave de prueba #2026  '), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Ocultar contraseña OFV'));
+    await tester.pump();
+    expect(find.text('  Clave de prueba #2026  '), findsNothing);
+    expect(find.text('••••••••'), findsOneWidget);
+    await tester.tap(find.byTooltip('Copiar contraseña OFV'));
+    await tester.pump();
+    expect(copied, ['  Clave de prueba #2026  ']);
+    await tester.tap(find.byTooltip('Mostrar contraseña OFV'));
+    await tester.pump();
+    expect(find.text('  Clave de prueba #2026  '), findsOneWidget);
+
+    await tester.tap(find.text('Cerrar'));
+    await tester.pumpAndSettle();
+    expect(find.text('  Clave de prueba #2026  '), findsNothing);
+    await tester.tap(find.text('Ver contraseña'));
+    await tester.pumpAndSettle();
+    expect(repo.ofvReveals, ['b1', 'b1']);
+  });
+
+  testWidgets('solicitud sin clave OFV muestra que no fue enviada', (tester) async {
+    final repo = await _pump(tester, _json(onboarding: {
+      ..._certifying,
+      'requested_at': '2026-10-27T15:00:00Z',
+    }));
+
+    expect(find.text('No enviado'), findsOneWidget);
+    expect(find.text('No enviada'), findsOneWidget);
+    expect(find.text('Ver contraseña'), findsNothing);
+    expect(repo.ofvReveals, isEmpty);
+  });
+
+  testWidgets('error al consultar clave OFV permite volver a intentarlo', (tester) async {
+    final repo = await _pump(tester, _json(onboarding: _requestedWithOfv));
+    repo.ofvError = const EcfOnboardingException('No se pudo leer la contraseña OFV.');
+
+    await tester.tap(find.text('Ver contraseña'));
+    await tester.pumpAndSettle();
+    expect(find.text('No se pudo leer la contraseña OFV.'), findsOneWidget);
+    expect(find.text('  Clave de prueba #2026  '), findsNothing);
+    await tester.tap(find.text('Entendido'));
+    await tester.pumpAndSettle();
+    repo.ofvError = null;
+    await tester.tap(find.text('Ver contraseña'));
+    await tester.pumpAndSettle();
+    expect(repo.ofvReveals, ['b1', 'b1']);
+    expect(find.text('  Clave de prueba #2026  '), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('refrescar descarta una consulta OFV pendiente', (tester) async {
+    final repo = await _pump(tester, _json(onboarding: _requestedWithOfv));
+    repo.ofvResponse = Completer<EcfOfvCredentials>();
+    await tester.tap(find.text('Ver contraseña'));
+    await tester.pump();
+    expect(find.text('Consultando contraseña…'), findsOneWidget);
+    await tester.tap(find.byTooltip('Refrescar'));
+    await tester.pumpAndSettle();
+    repo.ofvResponse!.complete(const EcfOfvCredentials(ofvPassword: 'respuesta anterior'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('respuesta anterior'), findsNothing);
+    expect(find.text('Ver contraseña'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('acceso OFV cabe en pantalla angosta', (tester) async {
+    await _pump(tester, _json(onboarding: _requestedWithOfv), width: 480);
+    await tester.tap(find.text('Ver contraseña'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('  Clave de prueba #2026  '), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets('negocio nuevo: pide capturar datos y no deja dar de alta', (tester) async {
     await _pump(tester, _json(fiscal: {'rnc': '133328828', 'business_legal_name': 'TROPELLA', 'ecf_enabled': false}));
@@ -470,5 +791,124 @@ void main() {
 
     expect(tester.takeException(), isNull);
     expect(find.text('Ver comprobantes'), findsOneWidget);
+  });
+
+  // ── Empresa de otra app (Busi Pos Web) ─────────────────────────────────────
+
+  group('empresa de Busi Pos Web', () {
+    const owner = EcfOwner.external('x1');
+    Map<String, dynamic> external({String? alanubeCompanyId = '01EXT'}) => {
+          'id': 'x1',
+          'source': 'flutter_shop+',
+          'external_id': 'c-1',
+          'status': 'in_progress',
+          'company_name': 'Maranatha',
+          'rnc': '131831151',
+          'legal_name': 'MARANATHA SRL',
+          'contact_name': 'Ana',
+          'contact_phone': '8095550000',
+          'ofv_user': 'maranatha.ofv',
+          'alanube_company_id': alanubeCompanyId,
+          'company_registered': alanubeCompanyId != null,
+          'requested_at': '2026-10-30T15:00:00Z',
+        };
+
+    testWidgets('mismos pasos de certificación; POS, secuencias y activación quedan en su app', (tester) async {
+      await _pump(tester, _json(external: external()), owner: owner);
+
+      expect(find.textContaining('Solicitud desde Busi Pos Web'), findsOneWidget);
+      expect(find.textContaining('Usuario OFV: maranatha.ofv'), findsOneWidget);
+      expect(find.textContaining('Su app mandó RNC 131831151 · MARANATHA SRL'), findsOneWidget);
+      // La empresa que registró su app cuenta como vinculada.
+      expect(find.text('01EXT'), findsOneWidget);
+      expect(find.text('Registrada por su app (Busi Pos Web)'), findsOneWidget);
+      expect(find.text('Postulación en la OFV'), findsOneWidget);
+      expect(find.text('Pruebas de simulación e-CF'), findsOneWidget);
+      // Nada de lo que vive en la base de su app.
+      expect(find.text('Copiar a la POS'), findsNothing);
+      expect(find.text('Cargar secuencia'), findsNothing);
+      expect(find.text('Verificar'), findsNothing);
+      expect(find.textContaining('Las carga el cliente en Busi Pos Web'), findsOneWidget);
+      expect(find.text('Encender en su app'), findsOneWidget);
+      expect(find.text('Copiar SQL para Busi Pos Web'), findsNothing);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('capturar datos arranca con lo que mandó su app', (tester) async {
+      await _pump(tester, _json(external: external()), owner: owner);
+      await tester.tap(find.text('Capturar datos'));
+      await tester.pumpAndSettle();
+      final dialog = tester.widget<EcfTaxpayerDialog>(find.byType(EcfTaxpayerDialog));
+      expect(dialog.initial.rnc, '131831151');
+      expect(dialog.initial.legalName, 'MARANATHA SRL');
+    });
+
+    testWidgets('guardar el certificado registra que el cliente lo autorizó', (tester) async {
+      final repo = await _pump(tester, _json(external: external(), onboarding: _certifying), owner: owner);
+      await tester.tap(find.text('Cargar certificado'));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('El cliente autorizó a MangoPOS a guardar su certificado'), findsOneWidget);
+      Navigator.of(tester.element(find.byType(EcfSigningCertificateDialog))).pop(
+        EcfCertificateInput(filename: 'maranatha.p12', bytes: Uint8List.fromList([7]), password: 'prueba'),
+      );
+      await tester.pumpAndSettle();
+
+      expect(repo.certificateSaves.single['owner'], owner);
+      expect(repo.certificateSaves.single['authorized'], isTrue);
+    });
+
+    testWidgets('empresa vinculada desde el panel: copia el SQL para enlazarla en su app', (tester) async {
+      final copied = <String>[];
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(SystemChannels.platform, (call) async {
+        if (call.method == 'Clipboard.setData') copied.add((call.arguments as Map)['text'] as String);
+        return null;
+      });
+      addTearDown(() => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(SystemChannels.platform, null));
+      await _pump(
+        tester,
+        _json(external: external(alanubeCompanyId: null), onboarding: {..._certifying, 'alanube_company_id': '01NEW'}),
+        owner: owner,
+      );
+
+      expect(find.textContaining('Primero enlaza la empresa en su app'), findsOneWidget);
+      await tester.tap(find.text('Copiar SQL para Busi Pos Web'));
+      await tester.pumpAndSettle();
+      expect(copied.single, contains("where company_id = 'c-1'"));
+      expect(copied.single, contains("values ('c-1', '01NEW', 'production')"));
+    });
+  });
+
+  testWidgets('la casilla de autorización bloquea confirmar hasta marcarla', (tester) async {
+    await tester.pumpWidget(const MaterialApp(
+      home: Scaffold(
+        body: EcfSigningCertificateDialog(
+          title: 'Guardar certificado digital',
+          intro: 'Prueba',
+          confirmLabel: 'Guardar certificado',
+          savedCertificateFilename: 'guardado.p12',
+          consentLabel: 'El cliente autorizó',
+        ),
+      ),
+    ));
+    FilledButton confirm() => tester.widget<FilledButton>(
+          find.ancestor(of: find.text('Guardar certificado'), matching: find.byWidgetPredicate((w) => w is FilledButton)),
+        );
+    expect(confirm().onPressed, isNull);
+    await tester.tap(find.text('El cliente autorizó'));
+    await tester.pump();
+    expect(confirm().onPressed, isNotNull);
+  });
+
+  test('EcfCompany: tomada por otro dueño', () {
+    EcfCompany company({String? business, String? external}) => EcfCompany.fromJson({
+          'id': '01M1',
+          'assigned_to_business_id': business,
+          'assigned_to_external_request_id': external,
+        });
+    expect(company().takenByOtherThan(const EcfOwner.business('b1')), isFalse);
+    expect(company(business: 'b1').takenByOtherThan(const EcfOwner.business('b1')), isFalse);
+    expect(company(business: 'b1').takenByOtherThan(const EcfOwner.external('b1')), isTrue);
+    expect(company(external: 'x1').takenByOtherThan(const EcfOwner.external('x1')), isFalse);
+    expect(company(external: 'x1').takenByOtherThan(const EcfOwner.business('b2')), isTrue);
   });
 }

@@ -1,10 +1,10 @@
 /// Solicitud de facturación electrónica que llegó de OTRA app que comparte
 /// esta cuenta de Alanube (hoy Busi Pos Web / flutter_shop+).
 ///
-/// No es un negocio de MangoPOS: vive en la base de la app que la pidió, y
-/// acá solo llega la bandeja de entrada para atenderla en un solo lugar. Por
-/// eso la fila NO lleva al detalle de un negocio —no existe— sino a un cuadro
-/// con los datos y el seguimiento.
+/// No es un negocio de MangoPOS: vive en la base de la app que la pidió. Por
+/// eso la fila NO lleva al detalle de un negocio —no existe— sino a la página
+/// de alta e-CF de la solicitud (`EcfOwner.external`), con el mismo proceso de
+/// certificación que un negocio y el seguimiento a un botón.
 class ExternalEcfRequest {
   const ExternalEcfRequest({
     required this.id,
@@ -20,6 +20,11 @@ class ExternalEcfRequest {
     this.contactName,
     this.contactPhone,
     this.alreadyAuthorized,
+    this.phone,
+    this.legalRepName,
+    this.branches = const [],
+    this.ecfTypes = const [],
+    this.ofvUser,
     this.alanubeCompanyId,
     this.requestedAt,
     this.receivedAt,
@@ -50,6 +55,17 @@ class ExternalEcfRequest {
   final String? contactName;
   final String? contactPhone;
   final bool? alreadyAuthorized;
+
+  /// Requisitos para la certificación ante la DGII (migración 20261028_0001
+  /// de mangospos). La clave de la Oficina Virtual y el certificado NO llegan
+  /// aquí: se le piden al cliente. Si autoriza guardarlo, el certificado se
+  /// carga cifrado en el alta e-CF de la solicitud.
+  final String? phone;
+  final String? legalRepName;
+  final List<ExternalEcfBranch> branches;
+  final List<String> ecfTypes;
+  final String? ofvUser;
+
   final String? alanubeCompanyId;
   final DateTime? requestedAt;
   final DateTime? receivedAt;
@@ -90,6 +106,9 @@ class ExternalEcfRequest {
       return s.isEmpty ? null : s;
     }
 
+    final branches = json['branches'];
+    final types = json['ecf_types'];
+
     return ExternalEcfRequest(
       id: (json['id'] ?? '').toString(),
       source: (json['source'] ?? '').toString(),
@@ -104,6 +123,22 @@ class ExternalEcfRequest {
       contactName: text(json['contact_name']),
       contactPhone: text(json['contact_phone']),
       alreadyAuthorized: json['already_authorized'] as bool?,
+      phone: text(json['phone']),
+      legalRepName: text(json['legal_rep_name']),
+      branches: branches is List
+          ? [
+              for (final b in branches)
+                if (b is Map && text(b['address']) != null)
+                  ExternalEcfBranch(
+                    name: text(b['name']),
+                    address: text(b['address'])!,
+                  ),
+            ]
+          : const [],
+      ecfTypes: types is List
+          ? types.map((t) => t.toString()).toList()
+          : const [],
+      ofvUser: text(json['ofv_user']),
       alanubeCompanyId: text(json['alanube_company_id']),
       requestedAt: date(json['requested_at']),
       receivedAt: date(json['received_at']),
@@ -111,4 +146,14 @@ class ExternalEcfRequest {
       handledAt: date(json['handled_at']),
     );
   }
+}
+
+/// Sucursal que declaró el cliente, con la dirección que pide la DGII.
+class ExternalEcfBranch {
+  const ExternalEcfBranch({this.name, required this.address});
+
+  final String? name;
+  final String address;
+
+  String get label => name == null ? address : '$name — $address';
 }
