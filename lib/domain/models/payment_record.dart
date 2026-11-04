@@ -108,6 +108,56 @@ class PaymentRecord {
   }
 }
 
+/// El último pago de un negocio, para verlo de un vistazo.
+///
+/// Varias facturas pagadas juntas (mismo momento, mismo método) son UN pago:
+/// el operador las registró de una vez y así las recuerda el cliente.
+class LastPayment {
+  const LastPayment({
+    required this.paidAt,
+    required this.netCents,
+    required this.method,
+    required this.invoices,
+  });
+
+  final DateTime paidAt;
+
+  /// Lo que quedó cobrado, ya restados los reembolsos.
+  final int netCents;
+  final String method;
+
+  /// Facturas (o cobros) que entraron en ese pago.
+  final int invoices;
+
+  String get methodLabel => paymentMethodLabel(method);
+}
+
+/// Último pago de cada negocio (business_id → pago).
+Map<String, LastPayment> lastPaymentByBusiness(Iterable<PaymentRecord> payments) {
+  final latest = <String, PaymentRecord>{};
+  for (final p in payments) {
+    final current = latest[p.businessId];
+    if (current == null || p.paidAt.isAfter(current.paidAt)) latest[p.businessId] = p;
+  }
+  final out = <String, LastPayment>{};
+  for (final last in latest.values) {
+    final batch = payments
+        .where((p) =>
+            p.businessId == last.businessId &&
+            p.kind == last.kind &&
+            p.method == last.method &&
+            p.paidAt.isAtSameMomentAs(last.paidAt))
+        .toList(growable: false);
+    out[last.businessId] = LastPayment(
+      paidAt: last.paidAt,
+      netCents: batch.fold(0, (s, p) => s + p.netCents),
+      method: last.method,
+      invoices: batch.length,
+    );
+  }
+  return out;
+}
+
 /// Etiqueta de un método de pago (mismos códigos que el diálogo de pago).
 String paymentMethodLabel(String method) => switch (method) {
   'card' => 'Tarjeta',

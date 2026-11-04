@@ -8,6 +8,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:intl/date_symbol_data_local.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'package:mangopos_administrador/core/format/formatters.dart';
 import 'package:mangopos_administrador/data/repositories/billing_repository.dart';
 import 'package:mangopos_administrador/domain/models/invoice_payment_result.dart';
 import 'package:mangopos_administrador/presentation/billing/widgets/mark_paid_dialog.dart';
@@ -114,5 +115,68 @@ void main() {
     expect(repo.calls.last.method, 'cash');
     expect(returned?.paid.single.invoiceId, 'i1');
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('se cobra solo lo marcado: desmarcar pide otra vista previa', (tester) async {
+    tester.view.physicalSize = const Size(1200, 1200);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final repo = _FakeRepo();
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [billingRepositoryProvider.overrideWithValue(repo)],
+        child: MaterialApp(
+          home: Builder(
+            builder: (context) => Scaffold(
+              body: Center(
+                child: FilledButton(
+                  onPressed: () => showDialog<InvoicePaymentResult>(
+                    context: context,
+                    builder: (_) => const MarkPaidDialog(
+                      invoices: [
+                        PayableInvoice(id: 'i1', number: 'MNG-2026-00041', businessId: 'b1',
+                            businessName: 'La Cocina Mexicana', total: 1500),
+                        PayableInvoice(id: 'i2', number: 'MNG-2026-00042', businessId: 'b1',
+                            businessName: 'La Cocina Mexicana', total: 1500),
+                        PayableInvoice(id: 'i3', number: 'MNG-2026-00043', businessId: 'b1',
+                            businessName: 'La Cocina Mexicana', total: 1500),
+                      ],
+                    ),
+                  ),
+                  child: const Text('abrir'),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.text('abrir'));
+    await tester.pumpAndSettle();
+    expect(repo.calls.single.ids, ['i1', 'i2', 'i3']);
+    expect(find.text('Registrar pago de 3 facturas'), findsOneWidget);
+    expect(find.text(formatRd(4500)), findsOneWidget);
+
+    // Desmarcar la del medio: total y vista previa son de las otras dos.
+    await tester.tap(find.byType(Checkbox).at(1));
+    await tester.pumpAndSettle();
+    expect(find.text('Registrar pago de 2 facturas'), findsOneWidget);
+    expect(find.text('Total (2 de 3)'), findsOneWidget);
+    expect(find.text(formatRd(3000)), findsOneWidget);
+    expect(repo.calls.last.ids, ['i1', 'i3']);
+    expect(repo.calls.last.dryRun, isTrue);
+
+    // Sin ninguna marcada no se puede confirmar.
+    await tester.tap(find.byType(Checkbox).at(0));
+    await tester.tap(find.byType(Checkbox).at(2));
+    await tester.pumpAndSettle();
+    expect(find.text('Marca al menos una factura.'), findsOneWidget);
+    final confirm = tester.widget<FilledButton>(find.ancestor(
+      of: find.textContaining('Marcar'),
+      matching: find.byType(FilledButton),
+    ).last);
+    expect(confirm.onPressed, isNull);
   });
 }

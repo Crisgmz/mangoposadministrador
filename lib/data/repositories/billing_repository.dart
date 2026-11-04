@@ -176,3 +176,25 @@ final filteredPaymentsProvider =
     return rows.where((p) => p.environment == env).toList(growable: false);
   });
 });
+
+/// Último pago de cada negocio (business_id → pago), con tarjeta o manual.
+final lastPaymentByBusinessProvider =
+    Provider<AsyncValue<Map<String, LastPayment>>>((ref) {
+  return ref.watch(paymentsProvider).whenData(lastPaymentByBusiness);
+});
+
+/// Facturas por cobrar (pendientes o vencidas) de cada negocio, de la más
+/// vieja a la más nueva: así salen en el diálogo de pago.
+final payableInvoicesByBusinessProvider =
+    Provider<AsyncValue<Map<String, List<MembershipInvoice>>>>((ref) {
+  return ref.watch(billingOverviewProvider).whenData((rows) {
+    final out = <String, List<MembershipInvoice>>{};
+    for (final i in rows.where((i) => i.isPayable)) {
+      (out[i.businessId] ??= []).add(i);
+    }
+    for (final list in out.values) {
+      list.sort((a, b) => a.periodStart.compareTo(b.periodStart));
+    }
+    return out;
+  });
+});

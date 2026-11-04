@@ -29,10 +29,6 @@ final _selectedStatusFilter =
 final _selectedInvoiceIds =
     StateProvider.autoDispose<Set<String>>((ref) => const {});
 
-/// Solo lo pendiente o vencido se puede marcar como pagado.
-bool _isPayable(MembershipInvoice i) =>
-    i.status == InvoiceStatus.pending || i.status == InvoiceStatus.expired;
-
 /// Las preguntas que se le hacen a esta pantalla son distintas: "¿a quién le
 /// cobro y cómo viene pagando?" (matriz), "¿qué pasa con esta factura?"
 /// (lista) y "¿qué me pagó cada negocio?" (pagos). Van en pestañas separadas en
@@ -485,7 +481,7 @@ class _SelectAllBox extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final payable = invoices.where(_isPayable).map((i) => i.id).toSet();
+    final payable = invoices.where((i) => i.isPayable).map((i) => i.id).toSet();
     if (payable.isEmpty) return const SizedBox.shrink();
     final selected = ref.watch(_selectedInvoiceIds);
     final count = payable.where(selected.contains).length;
@@ -516,7 +512,7 @@ class _RowCheckbox extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    if (!_isPayable(invoice)) return const SizedBox.shrink();
+    if (!invoice.isPayable) return const SizedBox.shrink();
     final selected = ref.watch(_selectedInvoiceIds).contains(invoice.id);
     return Checkbox(
       value: selected,
@@ -546,7 +542,7 @@ class _SelectionBar extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final ids = ref.watch(_selectedInvoiceIds);
     final selected = invoices
-        .where((i) => ids.contains(i.id) && _isPayable(i))
+        .where((i) => ids.contains(i.id) && i.isPayable)
         .toList(growable: false);
     if (selected.isEmpty) return const SizedBox.shrink();
     final total = selected.fold<double>(0, (s, i) => s + i.total);
@@ -588,14 +584,7 @@ class _SelectionBar extends ConsumerWidget {
             const SizedBox(width: 6),
             FilledButton.icon(
               onPressed: () => showMarkPaidDialog(context, ref, [
-                for (final i in selected)
-                  PayableInvoice(
-                    id: i.id,
-                    number: i.invoiceNumber,
-                    businessId: i.businessId,
-                    businessName: i.businessName,
-                    total: i.total,
-                  ),
+                for (final i in selected) PayableInvoice.fromInvoice(i),
               ]),
               icon: const Icon(HugeIcons.strokeRoundedTick02, size: 16),
               label: const Text('Marcar como pagadas'),
@@ -780,8 +769,7 @@ class _ActionMenu extends ConsumerWidget {
         const PopupMenuItem(value: 'pdf', child: Text('Ver PDF')),
         const PopupMenuItem(value: 'share', child: Text('Compartir / WhatsApp')),
         const PopupMenuDivider(),
-        if (invoice.status == InvoiceStatus.pending ||
-            invoice.status == InvoiceStatus.expired)
+        if (invoice.isPayable)
           const PopupMenuItem(
             value: 'pay',
             child: Text('Marcar como pagada'),
@@ -803,15 +791,7 @@ class _ActionMenu extends ConsumerWidget {
           case 'share':
             await shareInvoicePdf(invoice, company: company);
           case 'pay':
-            await showMarkPaidDialog(context, ref, [
-              PayableInvoice(
-                id: invoice.id,
-                number: invoice.invoiceNumber,
-                businessId: invoice.businessId,
-                businessName: invoice.businessName,
-                total: invoice.total,
-              ),
-            ]);
+            await showMarkPaidDialog(context, ref, [PayableInvoice.fromInvoice(invoice)]);
           case 'void':
             await _voidDialog(context, ref);
         }

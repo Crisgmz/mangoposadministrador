@@ -9,6 +9,7 @@ import '../../../data/repositories/billing_matrix_repository.dart';
 import '../../../data/repositories/billing_repository.dart';
 import '../../../data/repositories/subscription_billing_repository.dart';
 import '../../../domain/models/invoice_payment_result.dart';
+import '../../../domain/models/membership_invoice.dart';
 
 /// Lo mínimo para pagar una factura, venga de la lista de facturas o de una
 /// celda de la matriz.
@@ -20,6 +21,14 @@ class PayableInvoice {
     required this.businessName,
     required this.total,
   });
+
+  factory PayableInvoice.fromInvoice(MembershipInvoice i) => PayableInvoice(
+        id: i.id,
+        number: i.invoiceNumber,
+        businessId: i.businessId,
+        businessName: i.businessName,
+        total: i.total,
+      );
 
   final String id;
   final String number;
@@ -74,7 +83,8 @@ Future<InvoicePaymentResult?> showMarkPaidDialog(
   return result;
 }
 
-/// Registrar el pago de una o varias facturas.
+/// Registrar el pago de una o varias facturas. Con varias, cada una lleva su
+/// casilla: se puede cobrar solo una parte (2 de las 5 pendientes).
 ///
 /// Al abrir pide al servidor una vista previa (misma lógica, revertida) para
 /// mostrar ANTES de confirmar qué cobros con tarjeta se van a correr. Ese es
@@ -105,8 +115,16 @@ class _MarkPaidDialogState extends ConsumerState<MarkPaidDialog> {
   bool _saving = false;
   String? _error;
 
-  List<String> get _ids =>
-      widget.invoices.map((i) => i.id).toList(growable: false);
+  /// Las que se van a pagar. Arrancan todas marcadas.
+  late final Set<String> _selected = {for (final i in widget.invoices) i.id};
+
+  /// Cada cambio de selección pide otra vista previa; solo vale la última.
+  int _previewVersion = 0;
+
+  List<PayableInvoice> get _chosen =>
+      widget.invoices.where((i) => _selected.contains(i.id)).toList(growable: false);
+
+  List<String> get _ids => _chosen.map((i) => i.id).toList(growable: false);
 
   @override
   void initState() {
@@ -121,14 +139,28 @@ class _MarkPaidDialogState extends ConsumerState<MarkPaidDialog> {
   }
 
   Future<void> _loadPreview() async {
+    final version = ++_previewVersion;
+    final ids = _ids;
+    if (ids.isEmpty) return;
     try {
       final preview = await ref
           .read(billingRepositoryProvider)
-          .markInvoicesPaid(invoiceIds: _ids, method: _method, dryRun: true);
-      if (mounted) setState(() => _preview = preview);
+          .markInvoicesPaid(invoiceIds: ids, method: _method, dryRun: true);
+      if (mounted && version == _previewVersion) setState(() => _preview = preview);
     } catch (e) {
-      if (mounted) setState(() => _previewError = '$e');
+      if (mounted && version == _previewVersion) setState(() => _previewError = '$e');
     }
+  }
+
+  void _toggle(String id, bool on) {
+    setState(() {
+      on ? _selected.add(id) : _selected.remove(id);
+      // La vista previa vieja habla de otras facturas: no se puede confirmar
+      // con ella.
+      _preview = null;
+      _previewError = null;
+    });
+    _loadPreview();
   }
 
   bool get _isToday {
@@ -181,10 +213,11 @@ class _MarkPaidDialogState extends ConsumerState<MarkPaidDialog> {
 
   @override
   Widget build(BuildContext context) {
-    final n = widget.invoices.length;
+    final n = _selected.length;
     final payableCount = _preview?.paid.length ?? n;
-    final canConfirm =
-        !_saving && (_preview == null ? _previewError != null : payableCount > 0);
+    final canConfirm = !_saving &&
+        n > 0 &&
+        (_preview == null ? _previewError != null : payableCount > 0);
 
     return AlertDialog(
       title: Text(n == 1 ? 'Registrar pago' : 'Registrar pago de $n facturas'),
@@ -195,7 +228,11 @@ class _MarkPaidDialogState extends ConsumerState<MarkPaidDialog> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              _InvoiceSummary(invoices: widget.invoices),
+              _InvoiceSummary(
+                invoices: widget.invoices,
+                selected: _selected,
+                onToggle: _saving || widget.invoices.length == 1 ? null : _toggle,
+              ),
               const SizedBox(height: 16),
               const _Label('Método de pago'),
               const SizedBox(height: 6),
@@ -239,7 +276,13 @@ class _MarkPaidDialogState extends ConsumerState<MarkPaidDialog> {
                 ],
               ),
               const SizedBox(height: 16),
-              _Impact(preview: _preview, error: _previewError),
+              if (n == 0)
+                const Text(
+                  'Marca al menos una factura.',
+                  style: TextStyle(fontSize: 12, color: AppColors.mutedForeground),
+                )
+              else
+                _Impact(preview: _preview, error: _previewError),
               if (_error != null) ...[
                 const SizedBox(height: 10),
                 Text(
@@ -273,7 +316,9 @@ class _MarkPaidDialogState extends ConsumerState<MarkPaidDialog> {
               : Text(
                   payableCount == 1
                       ? 'Marcar como pagada'
-                      : 'Marcar $payableCount como pagadas',
+                      : payableCount == 0
+                          ? 'Marcar como pagadas'
+                          : 'Marcar $payableCount como pagadas',
                 ),
         ),
       ],
@@ -282,15 +327,23 @@ class _MarkPaidDialogState extends ConsumerState<MarkPaidDialog> {
 }
 
 class _InvoiceSummary extends StatelessWidget {
-  const _InvoiceSummary({required this.invoices});
+  const _InvoiceSummary({
+    required this.invoices,
+    required this.selected,
+    required this.onToggle,
+  });
   final List<PayableInvoice> invoices;
+  final Set<String> selected;
 
-  static const _maxLines = 5;
+  /// Null = sin casillas (una sola factura, o guardando).
+  final void Function(String id, bool on)? onToggle;
 
   @override
   Widget build(BuildContext context) {
-    final total = invoices.fold<double>(0, (s, i) => s + i.total);
-    final shown = invoices.take(_maxLines).toList(growable: false);
+    final total = invoices
+        .where((i) => selected.contains(i.id))
+        .fold<double>(0, (s, i) => s + i.total);
+    final checkable = invoices.length > 1;
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
@@ -300,11 +353,22 @@ class _InvoiceSummary extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          for (final i in shown)
+          for (final i in invoices)
             Padding(
               padding: const EdgeInsets.only(bottom: 4),
               child: Row(
                 children: [
+                  if (checkable)
+                    SizedBox(
+                      width: 28,
+                      height: 22,
+                      child: Checkbox(
+                        value: selected.contains(i.id),
+                        visualDensity: VisualDensity.compact,
+                        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        onChanged: onToggle == null ? null : (v) => onToggle!(i.id, v ?? false),
+                      ),
+                    ),
                   Text(
                     i.number,
                     style: const TextStyle(
@@ -332,21 +396,15 @@ class _InvoiceSummary extends StatelessWidget {
                 ],
               ),
             ),
-          if (invoices.length > _maxLines)
-            Text(
-              'y ${invoices.length - _maxLines} más',
-              style: const TextStyle(
-                fontSize: 11.5,
-                color: AppColors.mutedForeground,
-              ),
-            ),
           const Divider(height: 14),
           Row(
             children: [
-              const Expanded(
+              Expanded(
                 child: Text(
-                  'Total',
-                  style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700),
+                  checkable && selected.length != invoices.length
+                      ? 'Total (${selected.length} de ${invoices.length})'
+                      : 'Total',
+                  style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700),
                 ),
               ),
               Text(

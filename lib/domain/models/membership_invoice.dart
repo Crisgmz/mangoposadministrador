@@ -82,6 +82,10 @@ class MembershipInvoice {
   final int? ecfExtra;
   final int? ecfUnitPriceCents;
 
+  /// Solo lo pendiente o vencido se puede marcar como pagado.
+  bool get isPayable =>
+      status == InvoiceStatus.pending || status == InvoiceStatus.expired;
+
   factory MembershipInvoice.fromJson(Map<String, dynamic> json) {
     return MembershipInvoice(
       id: json['id'] as String,

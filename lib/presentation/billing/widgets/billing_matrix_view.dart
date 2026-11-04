@@ -8,6 +8,7 @@ import '../../../app/theme/app_colors.dart';
 import '../../../core/format/formatters.dart';
 import '../../../core/utils/debouncer.dart';
 import '../../../data/repositories/billing_matrix_repository.dart';
+import '../../../data/repositories/billing_repository.dart';
 import '../../../domain/models/billing_matrix.dart';
 import '../../dashboard/widgets/metric_card.dart';
 import '../../shared/business_avatar.dart';
@@ -66,6 +67,7 @@ const double _wBusiness = 250;
 const double _wPlan = 118;
 const double _wCard = 168;
 const double _wNext = 132;
+const double _wLast = 132;
 const double _wStatus = 104;
 const double _wMonth = 54;
 const double _hPad = 20;
@@ -423,6 +425,7 @@ class _MatrixTable extends StatelessWidget {
         _wPlan +
         _wCard +
         _wNext +
+        _wLast +
         _wStatus +
         (_wMonth * monthCount) +
         (_hPad * 2);
@@ -483,6 +486,7 @@ class _MatrixHeader extends StatelessWidget {
           const SizedBox(width: _wPlan, child: _HeadCell('Plan')),
           const SizedBox(width: _wCard, child: _HeadCell('Tarjeta')),
           const SizedBox(width: _wNext, child: _HeadCell('Próximo cobro')),
+          const SizedBox(width: _wLast, child: _HeadCell('Último pago')),
           const SizedBox(
             width: _wStatus,
             child: _HeadCell('Estado', align: TextAlign.center),
@@ -564,6 +568,7 @@ class _MatrixRow extends StatelessWidget {
             SizedBox(width: _wPlan, child: _PlanCell(row: row)),
             SizedBox(width: _wCard, child: _CardCell(row: row)),
             SizedBox(width: _wNext, child: _NextChargeCell(row: row)),
+            SizedBox(width: _wLast, child: _LastPaymentCell(row: row)),
             SizedBox(
               width: _wStatus,
               child: Center(child: _SubscriptionBadge(row: row)),
@@ -630,7 +635,109 @@ class _BusinessCell extends StatelessWidget {
             ],
           ),
         ),
+        _CollectAllButton(row: row),
       ],
+    );
+  }
+}
+
+/// Cobrar de una vez todo lo que debe el negocio. Toma TODAS sus facturas por
+/// cobrar, no solo las de los meses visibles; en el diálogo se desmarcan las
+/// que no pagó.
+class _CollectAllButton extends ConsumerWidget {
+  const _CollectAllButton({required this.row});
+  final BillingMatrixRow row;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final payable = ref.watch(payableInvoicesByBusinessProvider).valueOrNull?[row.businessId];
+    if (payable == null || payable.isEmpty) return const SizedBox.shrink();
+    final total = payable.fold<double>(0, (s, i) => s + i.total);
+    return Padding(
+      padding: const EdgeInsets.only(left: 6),
+      child: Tooltip(
+        message: '${payable.length} ${payable.length == 1 ? "factura por cobrar" : "facturas por cobrar"}'
+            ' · ${formatRd(total)}\nToca para registrar el pago',
+        child: InkWell(
+          borderRadius: BorderRadius.circular(99),
+          onTap: () => showMarkPaidDialog(context, ref, [
+            for (final i in payable) PayableInvoice.fromInvoice(i),
+          ]),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+            decoration: BoxDecoration(
+              color: AppColors.warning.withValues(alpha: 0.15),
+              borderRadius: BorderRadius.circular(99),
+            ),
+            child: Text(
+              'Cobrar ${payable.length}',
+              style: const TextStyle(
+                fontSize: 10.5,
+                fontWeight: FontWeight.w700,
+                color: AppColors.warning,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Cuándo pagó por última vez y cuánto: con tarjeta o registrado a mano.
+class _LastPaymentCell extends ConsumerWidget {
+  const _LastPaymentCell({required this.row});
+  final BillingMatrixRow row;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final async = ref.watch(lastPaymentByBusinessProvider);
+    final last = async.valueOrNull?[row.businessId];
+    if (last == null) {
+      return Text(
+        async.isLoading ? '…' : 'Sin pagos',
+        style: TextStyle(
+          fontSize: 12,
+          color: AppColors.mutedForeground.withValues(alpha: 0.8),
+        ),
+      );
+    }
+    final today = DateTime.now();
+    final paid = last.paidAt.toLocal();
+    final days = DateTime(today.year, today.month, today.day)
+        .difference(DateTime(paid.year, paid.month, paid.day))
+        .inDays;
+    return Tooltip(
+      message: [
+        DateFormat("d 'de' MMMM yyyy", 'es_DO').format(paid),
+        '${formatRd(last.netCents / 100)} · ${last.methodLabel}',
+        if (last.invoices > 1) '${last.invoices} facturas pagadas juntas',
+        days == 0 ? 'Hoy' : 'Hace $days ${days == 1 ? "día" : "días"}',
+      ].join('\n'),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            DateFormat('dd MMM yyyy', 'es_DO').format(paid),
+            style: const TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: AppColors.foreground,
+              fontFeatures: [FontFeature.tabularFigures()],
+            ),
+          ),
+          Text(
+            '${formatRdCompact(last.netCents / 100)} · ${last.methodLabel}',
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              fontSize: 11,
+              color: AppColors.mutedForeground,
+              fontFeatures: [FontFeature.tabularFigures()],
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

@@ -13,6 +13,7 @@ import '../../data/repositories/dashboard_repository.dart';
 import '../../data/repositories/plans_repository.dart';
 import '../../data/repositories/subscription_billing_repository.dart';
 import '../../data/services/invoice_pdf.dart';
+import '../billing/widgets/mark_paid_dialog.dart';
 import '../billing/widgets/open_invoice.dart';
 import '../../domain/models/company_settings.dart';
 import '../../domain/models/audit_log_entry.dart';
@@ -1756,6 +1757,15 @@ class _InvoicesSection extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    // De la más vieja a la más nueva: así salen en el diálogo de pago.
+    final payable = (invoicesAsync.valueOrNull ?? const <MembershipInvoice>[])
+        .where((i) => i.isPayable)
+        .toList()
+      ..sort((a, b) => a.periodStart.compareTo(b.periodStart));
+    final payableTotal = payable.fold<double>(0, (s, i) => s + i.total);
+    final lastAsync = ref.watch(lastPaymentByBusinessProvider);
+    final last = lastAsync.valueOrNull?[business.id];
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -1766,12 +1776,43 @@ class _InvoicesSection extends ConsumerWidget {
               child: _SectionTitle('Facturación de membresía',
                   icon: HugeIcons.strokeRoundedInvoice03),
             ),
-            OutlinedButton.icon(
-              onPressed: () => _generate(context, ref),
-              icon: const Icon(HugeIcons.strokeRoundedFile02, size: 14),
-              label: const Text('Nueva factura'),
+            Flexible(
+              child: Wrap(
+                alignment: WrapAlignment.end,
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  if (payable.isNotEmpty)
+                    FilledButton.icon(
+                      onPressed: () => showMarkPaidDialog(context, ref, [
+                        for (final i in payable) PayableInvoice.fromInvoice(i),
+                      ]),
+                      icon: const Icon(HugeIcons.strokeRoundedTick02, size: 14),
+                      label: Text(
+                        payable.length == 1
+                            ? 'Cobrar pendiente · ${formatRd(payableTotal)}'
+                            : 'Cobrar ${payable.length} pendientes · ${formatRd(payableTotal)}',
+                      ),
+                    ),
+                  OutlinedButton.icon(
+                    onPressed: () => _generate(context, ref),
+                    icon: const Icon(HugeIcons.strokeRoundedFile02, size: 14),
+                    label: const Text('Nueva factura'),
+                  ),
+                ],
+              ),
             ),
           ],
+        ),
+        const SizedBox(height: 8),
+        Text(
+          last == null
+              ? (lastAsync.isLoading ? 'Último pago: …' : 'Último pago: sin pagos registrados')
+              : 'Último pago: ${DateFormat("d 'de' MMMM yyyy", 'es_DO').format(last.paidAt.toLocal())}'
+                  ' · ${formatRd(last.netCents / 100)} · ${last.methodLabel}'
+                  '${last.invoices > 1 ? ' · ${last.invoices} facturas juntas' : ''}'
+                  ' (${formatRelative(last.paidAt)})',
+          style: const TextStyle(fontSize: 12.5, color: AppColors.mutedForeground),
         ),
         const SizedBox(height: 12),
         invoicesAsync.when(
