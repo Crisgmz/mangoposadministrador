@@ -227,3 +227,50 @@ DateTime? _parseDate(dynamic raw) {
   if (raw is DateTime) return raw;
   return DateTime.tryParse(raw.toString());
 }
+
+/// Tarjeta verificada de OTRO negocio del mismo dueño, que se puede copiar a
+/// este (`admin_list_owner_cards`, migración 0053). Solo datos enmascarados.
+class OwnerCard {
+  const OwnerCard({
+    required this.paymentMethodId,
+    required this.businessId,
+    required this.businessName,
+    this.brand,
+    this.masked,
+    this.expiration,
+    this.alreadyHere = false,
+  });
+
+  final String paymentMethodId;
+  final String businessId;
+  final String businessName;
+  final String? brand;
+  final String? masked;
+
+  /// AAAAMM, como la manda Azul.
+  final String? expiration;
+
+  /// Este negocio ya tiene la misma tarjeta.
+  final bool alreadyHere;
+
+  /// "MASTERCARD ••1627 · vence 12/28".
+  String get label {
+    final m = masked ?? '';
+    final last4 = m.length >= 4 ? m.substring(m.length - 4) : m;
+    final exp = expiration;
+    return [
+      '${(brand ?? 'Tarjeta').toUpperCase()} ••$last4',
+      if (exp != null && exp.length == 6) 'vence ${exp.substring(4)}/${exp.substring(2, 4)}',
+    ].join(' · ');
+  }
+
+  factory OwnerCard.fromJson(Map<String, dynamic> json) => OwnerCard(
+        paymentMethodId: json['payment_method_id'] as String,
+        businessId: json['business_id'] as String,
+        businessName: (json['business_name'] as String?) ?? '—',
+        brand: json['brand'] as String?,
+        masked: json['masked'] as String?,
+        expiration: json['expiration'] as String?,
+        alreadyHere: json['already_here'] == true,
+      );
+}

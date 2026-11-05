@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:hugeicons/hugeicons.dart';
@@ -8,8 +10,11 @@ import '../../../core/format/formatters.dart';
 import '../../../data/repositories/billing_matrix_repository.dart';
 import '../../../data/repositories/billing_repository.dart';
 import '../../../data/repositories/subscription_billing_repository.dart';
+import '../../../domain/models/card_charge_result.dart';
 import '../../../domain/models/invoice_payment_result.dart';
 import '../../../domain/models/membership_invoice.dart';
+import '../../../domain/models/subscription_billing.dart';
+import 'edit_invoice_dialog.dart';
 
 /// Lo mínimo para pagar una factura, venga de la lista de facturas o de una
 /// celda de la matriz.
@@ -67,6 +72,9 @@ Future<InvoicePaymentResult?> showMarkPaidDialog(
     ref.invalidate(subscriptionBillingProvider(id));
   }
 
+  // Un cobro a la tarjeta también es un pago: aparece en Pagos.
+  ref.invalidate(subscriptionChargesProvider);
+
   if (context.mounted) {
     final n = result.paid.length;
     final moved = result.moved.length;
@@ -84,7 +92,16 @@ Future<InvoicePaymentResult?> showMarkPaidDialog(
 }
 
 /// Registrar el pago de una o varias facturas. Con varias, cada una lleva su
-/// casilla: se puede cobrar solo una parte (2 de las 5 pendientes).
+/// casilla: se puede cobrar solo una parte (2 de las 5 pendientes). El precio
+/// de cada una se puede cambiar: la factura queda con el monto cobrado
+/// (migración 0053).
+///
+/// Dos formas, a elección del operador:
+///   · Registrar pago: el cliente ya pagó por otro medio; no se cobra nada.
+///   · Cobrar a la tarjeta: UN cargo por el total a la tarjeta principal del
+///     negocio (migración 0054). Solo con facturas de un mismo negocio y
+///     tarjeta verificada. Si no se sabe si Azul cobró, el diálogo NO deja
+///     volver a cobrar: ofrece Verificar.
 ///
 /// Al abrir pide al servidor una vista previa (misma lógica, revertida) para
 /// mostrar ANTES de confirmar qué cobros con tarjeta se van a correr. Ese es
@@ -97,6 +114,9 @@ class MarkPaidDialog extends ConsumerStatefulWidget {
   @override
   ConsumerState<MarkPaidDialog> createState() => _MarkPaidDialogState();
 }
+
+/// Cómo se paga: se registra un pago ya hecho, o se cobra a la tarjeta.
+enum PayMode { manual, card }
 
 class _MarkPaidDialogState extends ConsumerState<MarkPaidDialog> {
   static const _methods = <(String, String)>[
@@ -126,6 +146,33 @@ class _MarkPaidDialogState extends ConsumerState<MarkPaidDialog> {
 
   List<String> get _ids => _chosen.map((i) => i.id).toList(growable: false);
 
+  /// Precio a cobrar que el operador cambió, por factura.
+  final Map<String, double> _prices = {};
+
+  PayMode _mode = PayMode.manual;
+
+  /// Llave del pedido de cobro a la tarjeta. Se conserva entre reintentos del
+  /// MISMO cobro (si se cae la red, repetirla no cobra dos veces) y se
+  /// descarta cuando Azul responde algo definitivo.
+  String? _requestKey;
+
+  /// Cobro a la tarjeta que quedó sin confirmar: solo se puede verificar.
+  String? _pendingChargeId;
+
+  /// Un solo negocio: el cobro a la tarjeta es de un negocio a la vez.
+  String? get _singleBusinessId {
+    final ids = widget.invoices.map((i) => i.businessId).toSet();
+    return ids.length == 1 ? ids.first : null;
+  }
+
+  double get _chosenTotal => _chosen.fold(0, (s, i) => s + (_prices[i.id] ?? i.total));
+
+  /// Lo que se manda al servidor: solo las marcadas con precio distinto.
+  Map<String, double> get _totals => {
+        for (final i in _chosen)
+          if (_prices[i.id] != null && (_prices[i.id]! - i.total).abs() >= 0.005) i.id: _prices[i.id]!,
+      };
+
   @override
   void initState() {
     super.initState();
@@ -145,7 +192,7 @@ class _MarkPaidDialogState extends ConsumerState<MarkPaidDialog> {
     try {
       final preview = await ref
           .read(billingRepositoryProvider)
-          .markInvoicesPaid(invoiceIds: ids, method: _method, dryRun: true);
+          .markInvoicesPaid(invoiceIds: ids, method: _method, dryRun: true, totals: _totals);
       if (mounted && version == _previewVersion) setState(() => _preview = preview);
     } catch (e) {
       if (mounted && version == _previewVersion) setState(() => _previewError = '$e');
@@ -157,6 +204,24 @@ class _MarkPaidDialogState extends ConsumerState<MarkPaidDialog> {
       on ? _selected.add(id) : _selected.remove(id);
       // La vista previa vieja habla de otras facturas: no se puede confirmar
       // con ella.
+      _preview = null;
+      _previewError = null;
+    });
+    _loadPreview();
+  }
+
+  Future<void> _editPrice(PayableInvoice i) async {
+    final price = await showDialog<double>(
+      context: context,
+      builder: (_) => _PriceDialog(invoice: i, current: _prices[i.id] ?? i.total),
+    );
+    if (price == null || !mounted) return;
+    setState(() {
+      if ((price - i.total).abs() < 0.005) {
+        _prices.remove(i.id);
+      } else {
+        _prices[i.id] = price;
+      }
       _preview = null;
       _previewError = null;
     });
@@ -183,6 +248,7 @@ class _MarkPaidDialogState extends ConsumerState<MarkPaidDialog> {
   }
 
   Future<void> _confirm() async {
+    if (_mode == PayMode.card) return _chargeCard();
     setState(() {
       _saving = true;
       _error = null;
@@ -199,6 +265,7 @@ class _MarkPaidDialogState extends ConsumerState<MarkPaidDialog> {
         paidAt: _isToday
             ? null
             : DateTime(_paidOn.year, _paidOn.month, _paidOn.day, 12),
+        totals: _totals,
       );
       if (mounted) Navigator.of(context).pop(result);
     } catch (e) {
@@ -211,12 +278,175 @@ class _MarkPaidDialogState extends ConsumerState<MarkPaidDialog> {
     }
   }
 
+  /// Lo pagado según el servidor o, si respondió sin detalle (cobro ya
+  /// cerrado), las facturas que se cobraron.
+  InvoicePaymentResult _paidFrom(CardChargeResult r) =>
+      r.payment ??
+      InvoicePaymentResult(
+        paid: [
+          for (final i in _chosen)
+            PaidInvoice(
+              invoiceId: i.id,
+              invoiceNumber: i.number,
+              businessId: i.businessId,
+              businessName: i.businessName,
+              total: _prices[i.id] ?? i.total,
+            ),
+        ],
+        skipped: const [],
+        moved: const [],
+        dryRun: false,
+      );
+
+  Future<void> _chargeCard() async {
+    final card = _cardLabelOf(_billing(listen: false));
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Cobrar a la tarjeta'),
+        content: Text(
+          'Se cobra ${formatRd(_chosenTotal)} a $card, ahora, en un solo cargo por '
+          '${_chosen.length} ${_chosen.length == 1 ? "factura" : "facturas"}. Es un cobro real.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancelar')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Cobrar')),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    _requestKey ??= _newRequestKey();
+    try {
+      final r = await ref.read(billingRepositoryProvider).chargeInvoicesToCard(
+            invoiceIds: _ids,
+            requestKey: _requestKey!,
+            totals: _totals,
+          );
+      _onCardResult(r);
+    } on CardChargeException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _saving = false;
+        _error = e.message;
+        if (e.code == 'charge_pending') {
+          _pendingChargeId = e.chargeId;
+        } else if (e.code != 'finalize_failed') {
+          // El servidor no llegó a cobrar: el próximo intento es otro pedido.
+          _requestKey = null;
+        } else {
+          _pendingChargeId = e.chargeId;
+        }
+      });
+    } catch (e) {
+      // Sin respuesta: puede que se haya cobrado. La misma llave lo sabe.
+      if (!mounted) return;
+      setState(() {
+        _saving = false;
+        _error = 'No llegó la respuesta ($e). Toca "Cobrar" otra vez: con el mismo pedido no se cobra dos veces.';
+      });
+    }
+  }
+
+  Future<void> _verify() async {
+    final id = _pendingChargeId;
+    if (id == null) return;
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      _onCardResult(await ref.read(billingRepositoryProvider).verifyCardCharge(id));
+    } on CardChargeException catch (e) {
+      if (mounted) {
+        setState(() {
+          _saving = false;
+          _error = e.message;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _saving = false;
+          _error = '$e';
+        });
+      }
+    }
+  }
+
+  void _onCardResult(CardChargeResult r) {
+    if (!mounted) return;
+    switch (r.status) {
+      case CardChargeStatus.approved:
+        Navigator.of(context).pop(_paidFrom(r));
+      case CardChargeStatus.pending:
+        setState(() {
+          _saving = false;
+          _pendingChargeId = r.chargeId;
+          _error = r.message ?? 'No se supo si Azul cobró. Verifica antes de volver a cobrar.';
+        });
+      case CardChargeStatus.declined:
+      case CardChargeStatus.error:
+        setState(() {
+          _saving = false;
+          _pendingChargeId = null;
+          _requestKey = null;
+          _error = r.message ?? 'Azul no cobró.';
+        });
+    }
+  }
+
+  static String _newRequestKey() {
+    final r = Random.secure();
+    final b = List<int>.generate(16, (_) => r.nextInt(256));
+    b[6] = (b[6] & 0x0f) | 0x40; // versión 4
+    b[8] = (b[8] & 0x3f) | 0x80; // variante RFC 4122
+    final h = b.map((x) => x.toRadixString(16).padLeft(2, '0')).join();
+    return '${h.substring(0, 8)}-${h.substring(8, 12)}-${h.substring(12, 16)}-'
+        '${h.substring(16, 20)}-${h.substring(20)}';
+  }
+
+  /// Suscripción del negocio (trae la tarjeta principal). Null con varios negocios.
+  AsyncValue<SubscriptionBilling?>? _billing({required bool listen}) {
+    final id = _singleBusinessId;
+    if (id == null) return null;
+    final p = subscriptionBillingProvider(id);
+    return listen ? ref.watch(p) : ref.read(p);
+  }
+
+  /// "MASTERCARD ••1627" de la tarjeta principal, o null si no se puede cobrar.
+  static String? _cardLabelOf(AsyncValue<SubscriptionBilling?>? billing) {
+    final card = billing?.valueOrNull?.card;
+    if (card == null || card.status != 'verified') return null;
+    final m = card.masked ?? '';
+    return '${(card.brand ?? 'Tarjeta').toUpperCase()} ••${m.length >= 4 ? m.substring(m.length - 4) : m}';
+  }
+
+  /// Por qué no se puede cobrar a la tarjeta, o null si se puede.
+  static String? _cardBlockerOf(AsyncValue<SubscriptionBilling?>? billing) {
+    if (billing == null) return 'Cobrar a la tarjeta es de un negocio a la vez.';
+    if (billing.isLoading) return 'Revisando la tarjeta…';
+    final card = billing.valueOrNull?.card;
+    if (card == null) return 'El negocio no tiene tarjeta principal.';
+    if (card.status != 'verified') return 'La tarjeta principal no está verificada.';
+    return null;
+  }
+
   @override
   Widget build(BuildContext context) {
     final n = _selected.length;
     final payableCount = _preview?.paid.length ?? n;
+    final billing = _billing(listen: true);
+    final cardBlocker = _cardBlockerOf(billing);
+    final byCard = _mode == PayMode.card;
+    final pending = _pendingChargeId != null;
     final canConfirm = !_saving &&
+        !pending &&
         n > 0 &&
+        (!byCard || cardBlocker == null) &&
         (_preview == null ? _previewError != null : payableCount > 0);
 
     return AlertDialog(
@@ -231,9 +461,49 @@ class _MarkPaidDialogState extends ConsumerState<MarkPaidDialog> {
               _InvoiceSummary(
                 invoices: widget.invoices,
                 selected: _selected,
-                onToggle: _saving || widget.invoices.length == 1 ? null : _toggle,
+                prices: _prices,
+                onToggle: _saving || pending || widget.invoices.length == 1 ? null : _toggle,
+                onEditPrice: _saving || pending ? null : _editPrice,
               ),
               const SizedBox(height: 16),
+              SegmentedButton<PayMode>(
+                segments: const [
+                  ButtonSegment(
+                    value: PayMode.manual,
+                    icon: Icon(HugeIcons.strokeRoundedTick02, size: 15),
+                    label: Text('Registrar pago'),
+                  ),
+                  ButtonSegment(
+                    value: PayMode.card,
+                    icon: Icon(HugeIcons.strokeRoundedCreditCard, size: 15),
+                    label: Text('Cobrar a la tarjeta'),
+                  ),
+                ],
+                selected: {_mode},
+                onSelectionChanged: _saving || pending
+                    ? null
+                    : (v) => setState(() {
+                          _mode = v.first;
+                          _error = null;
+                        }),
+              ),
+              const SizedBox(height: 12),
+              if (byCard)
+                Text(
+                  cardBlocker ??
+                      'Se cobra ${formatRd(_chosenTotal)} a ${_cardLabelOf(billing)} (tarjeta principal), '
+                          'ahora, en un solo cargo. Si Azul aprueba, las facturas quedan pagadas.',
+                  style: TextStyle(
+                    fontSize: 12.5,
+                    color: cardBlocker == null ? AppColors.foreground : AppColors.warning,
+                  ),
+                )
+              else ...[
+              const Text(
+                'El cliente ya pagó por otro medio: no se le cobra nada.',
+                style: TextStyle(fontSize: 12, color: AppColors.mutedForeground),
+              ),
+              const SizedBox(height: 10),
               const _Label('Método de pago'),
               const SizedBox(height: 6),
               Wrap(
@@ -275,6 +545,7 @@ class _MarkPaidDialogState extends ConsumerState<MarkPaidDialog> {
                   ),
                 ],
               ),
+              ],
               const SizedBox(height: 16),
               if (n == 0)
                 const Text(
@@ -300,8 +571,14 @@ class _MarkPaidDialogState extends ConsumerState<MarkPaidDialog> {
       actions: [
         TextButton(
           onPressed: _saving ? null : () => Navigator.of(context).pop(),
-          child: const Text('Cancelar'),
+          child: Text(pending ? 'Cerrar' : 'Cancelar'),
         ),
+        if (pending)
+          FilledButton(
+            onPressed: _saving ? null : _verify,
+            child: const Text('Verificar cobro'),
+          )
+        else
         FilledButton(
           onPressed: canConfirm ? _confirm : null,
           child: _saving
@@ -314,11 +591,13 @@ class _MarkPaidDialogState extends ConsumerState<MarkPaidDialog> {
                   ),
                 )
               : Text(
-                  payableCount == 1
-                      ? 'Marcar como pagada'
-                      : payableCount == 0
-                          ? 'Marcar como pagadas'
-                          : 'Marcar $payableCount como pagadas',
+                  byCard
+                      ? 'Cobrar ${formatRd(_chosenTotal)}'
+                      : payableCount == 1
+                          ? 'Marcar como pagada'
+                          : payableCount == 0
+                              ? 'Marcar como pagadas'
+                              : 'Marcar $payableCount como pagadas',
                 ),
         ),
       ],
@@ -330,19 +609,23 @@ class _InvoiceSummary extends StatelessWidget {
   const _InvoiceSummary({
     required this.invoices,
     required this.selected,
+    required this.prices,
     required this.onToggle,
+    required this.onEditPrice,
   });
   final List<PayableInvoice> invoices;
   final Set<String> selected;
+  final Map<String, double> prices;
 
   /// Null = sin casillas (una sola factura, o guardando).
   final void Function(String id, bool on)? onToggle;
+  final void Function(PayableInvoice invoice)? onEditPrice;
 
   @override
   Widget build(BuildContext context) {
     final total = invoices
         .where((i) => selected.contains(i.id))
-        .fold<double>(0, (s, i) => s + i.total);
+        .fold<double>(0, (s, i) => s + (prices[i.id] ?? i.total));
     final checkable = invoices.length > 1;
     return Container(
       padding: const EdgeInsets.all(12),
@@ -385,12 +668,44 @@ class _InvoiceSummary extends StatelessWidget {
                       style: const TextStyle(fontSize: 12.5),
                     ),
                   ),
-                  Text(
-                    formatRd(i.total),
-                    style: const TextStyle(
-                      fontSize: 12.5,
-                      fontWeight: FontWeight.w600,
-                      fontFeatures: [FontFeature.tabularFigures()],
+                  if (prices[i.id] != null) ...[
+                    Text(
+                      formatRd(i.total),
+                      style: const TextStyle(
+                        fontSize: 11,
+                        color: AppColors.mutedForeground,
+                        decoration: TextDecoration.lineThrough,
+                        fontFeatures: [FontFeature.tabularFigures()],
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                  ],
+                  // Tocar el monto cambia el precio a cobrar.
+                  Tooltip(
+                    message: 'Cambiar el precio a cobrar',
+                    child: InkWell(
+                      key: ValueKey('price-${i.id}'),
+                      borderRadius: BorderRadius.circular(6),
+                      onTap: onEditPrice == null ? null : () => onEditPrice!(i),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              formatRd(prices[i.id] ?? i.total),
+                              style: TextStyle(
+                                fontSize: 12.5,
+                                fontWeight: FontWeight.w600,
+                                color: prices[i.id] != null ? AppColors.accent : null,
+                                fontFeatures: const [FontFeature.tabularFigures()],
+                              ),
+                            ),
+                            const SizedBox(width: 4),
+                            const Icon(HugeIcons.strokeRoundedEdit02, size: 12, color: AppColors.mutedForeground),
+                          ],
+                        ),
+                      ),
                     ),
                   ),
                 ],
@@ -506,6 +821,74 @@ class _Impact extends StatelessWidget {
             style: const TextStyle(fontSize: 12, color: AppColors.warning),
           ),
         ],
+      ],
+    );
+  }
+}
+
+/// Precio a cobrar de una factura.
+class _PriceDialog extends StatefulWidget {
+  const _PriceDialog({required this.invoice, required this.current});
+  final PayableInvoice invoice;
+  final double current;
+
+  @override
+  State<_PriceDialog> createState() => _PriceDialogState();
+}
+
+class _PriceDialogState extends State<_PriceDialog> {
+  late final _controller = TextEditingController(text: widget.current.toStringAsFixed(2));
+  String? _error;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final v = parseAmount(_controller.text);
+    if (v == null || v < 0) {
+      setState(() => _error = 'Escribe un monto válido.');
+      return;
+    }
+    Navigator.of(context).pop(v);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text('Precio a cobrar · ${widget.invoice.number}'),
+      content: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 360),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            TextField(
+              controller: _controller,
+              autofocus: true,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              onSubmitted: (_) => _submit(),
+              decoration: InputDecoration(
+                labelText: 'Total',
+                prefixText: 'RD\$ ',
+                errorText: _error,
+                helperText: 'Factura: ${formatRd(widget.invoice.total)}. '
+                    'La factura queda con este monto.',
+                border: const OutlineInputBorder(),
+                isDense: true,
+              ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(widget.invoice.total),
+          child: const Text('Volver al de la factura'),
+        ),
+        FilledButton(onPressed: _submit, child: const Text('Usar este precio')),
       ],
     );
   }

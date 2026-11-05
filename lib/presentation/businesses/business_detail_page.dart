@@ -13,6 +13,7 @@ import '../../data/repositories/dashboard_repository.dart';
 import '../../data/repositories/plans_repository.dart';
 import '../../data/repositories/subscription_billing_repository.dart';
 import '../../data/services/invoice_pdf.dart';
+import '../billing/widgets/edit_invoice_dialog.dart';
 import '../billing/widgets/mark_paid_dialog.dart';
 import '../billing/widgets/open_invoice.dart';
 import '../../domain/models/company_settings.dart';
@@ -1950,25 +1951,7 @@ class _InvoiceRow extends ConsumerWidget {
                         ),
                       ),
                       const SizedBox(width: 8),
-                      PopupMenuButton<String>(
-                        icon: const Icon(
-                          HugeIcons.strokeRoundedMoreVertical,
-                          size: 16,
-                          color: AppColors.mutedForeground,
-                        ),
-                        itemBuilder: (_) => const [
-                          PopupMenuItem(value: 'pdf', child: Text('Ver PDF')),
-                          PopupMenuItem(
-                              value: 'share', child: Text('Compartir / WhatsApp')),
-                        ],
-                        onSelected: (action) async {
-                          if (action == 'pdf') {
-                            await previewInvoicePdf(invoice, company: company);
-                          } else if (action == 'share') {
-                            await shareInvoicePdf(invoice, company: company);
-                          }
-                        },
-                      ),
+                      _InvoiceMenu(invoice: invoice, company: company),
                     ],
                   ),
                 ],
@@ -2010,30 +1993,52 @@ class _InvoiceRow extends ConsumerWidget {
                 const SizedBox(width: 12),
                 _MiniInvoiceStatus(status: invoice.status),
                 const SizedBox(width: 4),
-                PopupMenuButton<String>(
-                  icon: const Icon(
-                    HugeIcons.strokeRoundedMoreVertical,
-                    size: 16,
-                    color: AppColors.mutedForeground,
-                  ),
-                  itemBuilder: (_) => const [
-                    PopupMenuItem(value: 'pdf', child: Text('Ver PDF')),
-                    PopupMenuItem(
-                        value: 'share', child: Text('Compartir / WhatsApp')),
-                  ],
-                  onSelected: (action) async {
-                    if (action == 'pdf') {
-                      await previewInvoicePdf(invoice, company: company);
-                    } else if (action == 'share') {
-                      await shareInvoicePdf(invoice, company: company);
-                    }
-                  },
-                ),
+                _InvoiceMenu(invoice: invoice, company: company),
               ],
             );
           },
         ),
       ),
+    );
+  }
+}
+
+/// Acciones de una factura del negocio: verla, compartirla y, si está por
+/// cobrar, registrar su pago o editarla.
+class _InvoiceMenu extends ConsumerWidget {
+  const _InvoiceMenu({required this.invoice, required this.company});
+  final MembershipInvoice invoice;
+  final CompanySettings company;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return PopupMenuButton<String>(
+      icon: const Icon(
+        HugeIcons.strokeRoundedMoreVertical,
+        size: 16,
+        color: AppColors.mutedForeground,
+      ),
+      itemBuilder: (_) => [
+        const PopupMenuItem(value: 'pdf', child: Text('Ver PDF')),
+        const PopupMenuItem(value: 'share', child: Text('Compartir / WhatsApp')),
+        if (invoice.isPayable) ...[
+          const PopupMenuDivider(),
+          const PopupMenuItem(value: 'pay', child: Text('Marcar como pagada')),
+          const PopupMenuItem(value: 'edit', child: Text('Editar factura')),
+        ],
+      ],
+      onSelected: (action) async {
+        switch (action) {
+          case 'pdf':
+            await previewInvoicePdf(invoice, company: company);
+          case 'share':
+            await shareInvoicePdf(invoice, company: company);
+          case 'pay':
+            await showMarkPaidDialog(context, ref, [PayableInvoice.fromInvoice(invoice)]);
+          case 'edit':
+            await showEditInvoiceDialog(context, ref, invoice);
+        }
+      },
     );
   }
 }

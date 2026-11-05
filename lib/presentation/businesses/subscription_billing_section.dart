@@ -6,6 +6,7 @@ import 'package:intl/intl.dart';
 
 import '../../app/theme/app_colors.dart';
 import '../../core/format/formatters.dart';
+import '../../data/repositories/billing_matrix_repository.dart';
 import '../../data/repositories/subscription_billing_repository.dart';
 import '../../domain/models/subscription_billing.dart';
 
@@ -50,25 +51,27 @@ class SubscriptionBillingSection extends ConsumerWidget {
                 ),
               ),
             ),
-            if (billingAsync.valueOrNull != null)
-              // Wrap y no Row: con trial + precio especial + editar son tres
-              // botones, y en un detalle angosto desbordaban la cabecera.
-              Flexible(
-                child: Wrap(
-                  alignment: WrapAlignment.end,
-                  spacing: 8,
-                  runSpacing: 8,
-                  children:
-                      _headerActions(context, ref, billingAsync.valueOrNull!),
-                ),
-              )
-            else if (billingAsync.hasValue)
-              OutlinedButton.icon(
-                onPressed: () => _edit(context, ref, null,
-                    preset: SubscriptionBillingPreset.activateProduction),
-                icon: const Icon(HugeIcons.strokeRoundedSettings02, size: 14),
-                label: const Text('Configurar suscripción'),
+            // Wrap y no Row: con trial + precio especial + editar son tres
+            // botones, y en un detalle angosto desbordaban la cabecera.
+            Flexible(
+              child: Wrap(
+                alignment: WrapAlignment.end,
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  _OwnerCardButton(businessId: businessId, businessName: businessName),
+                  if (billingAsync.valueOrNull != null)
+                    ..._headerActions(context, ref, billingAsync.valueOrNull!)
+                  else if (billingAsync.hasValue)
+                    OutlinedButton.icon(
+                      onPressed: () => _edit(context, ref, null,
+                          preset: SubscriptionBillingPreset.activateProduction),
+                      icon: const Icon(HugeIcons.strokeRoundedSettings02, size: 14),
+                      label: const Text('Configurar suscripción'),
+                    ),
+                ],
               ),
+            ),
           ],
         ),
         const SizedBox(height: 12),
@@ -241,6 +244,151 @@ class SubscriptionBillingSection extends ConsumerWidget {
         SnackBar(content: Text('Error: $e')),
       );
     }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Tarjeta de otro negocio del mismo dueño
+// ---------------------------------------------------------------------------
+
+/// Solo aparece si el dueño tiene otro negocio con una tarjeta verificada que
+/// este todavía no tiene: así no vuelve a meterla ni a pasar la verificación.
+class _OwnerCardButton extends ConsumerWidget {
+  const _OwnerCardButton({required this.businessId, required this.businessName});
+  final String businessId;
+  final String businessName;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final cards = ref.watch(ownerCardsProvider(businessId)).valueOrNull ?? const <OwnerCard>[];
+    if (!cards.any((c) => !c.alreadyHere)) return const SizedBox.shrink();
+    return OutlinedButton.icon(
+      onPressed: () => _pick(context, ref, cards),
+      icon: const Icon(HugeIcons.strokeRoundedCreditCardAdd, size: 14),
+      label: const Text('Usar tarjeta de otro negocio'),
+    );
+  }
+
+  Future<void> _pick(BuildContext context, WidgetRef ref, List<OwnerCard> cards) async {
+    final choice = await showDialog<OwnerCardChoice>(
+      context: context,
+      builder: (_) => OwnerCardDialog(businessName: businessName, cards: cards),
+    );
+    if (choice == null || !context.mounted) return;
+    try {
+      await ref.read(subscriptionBillingRepositoryProvider).copyOwnerCard(
+            paymentMethodId: choice.card.paymentMethodId,
+            targetBusinessId: businessId,
+            makeDefault: choice.makeDefault,
+            clientAuthorized: true,
+          );
+      ref.invalidate(ownerCardsProvider(businessId));
+      ref.invalidate(subscriptionBillingProvider(businessId));
+      ref.invalidate(billingMatrixProvider);
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('$businessName ahora tiene la tarjeta ${choice.card.label}'
+              '${choice.makeDefault ? ' como principal' : ''}.'),
+        ),
+      );
+    } catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+    }
+  }
+}
+
+class OwnerCardChoice {
+  const OwnerCardChoice({required this.card, required this.makeDefault});
+  final OwnerCard card;
+  final bool makeDefault;
+}
+
+/// Elegir la tarjeta y confirmar que el dueño autorizó cobrarla aquí.
+class OwnerCardDialog extends StatefulWidget {
+  const OwnerCardDialog({required this.businessName, required this.cards, super.key});
+  final String businessName;
+  final List<OwnerCard> cards;
+
+  @override
+  State<OwnerCardDialog> createState() => _OwnerCardDialogState();
+}
+
+class _OwnerCardDialogState extends State<OwnerCardDialog> {
+  late OwnerCard? _card = widget.cards.where((c) => !c.alreadyHere).firstOrNull;
+  bool _makeDefault = true;
+  bool _authorized = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Usar tarjeta de otro negocio'),
+      content: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 460),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                'Tarjetas verificadas de los otros negocios del mismo dueño. Se copia a '
+                '${widget.businessName} sin volver a pedirla ni verificarla.',
+                style: const TextStyle(fontSize: 12.5, color: AppColors.mutedForeground),
+              ),
+              const SizedBox(height: 12),
+              for (final c in widget.cards)
+                ListTile(
+                  enabled: !c.alreadyHere,
+                  onTap: () => setState(() => _card = c),
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(
+                    identical(_card, c) ? Icons.radio_button_checked : Icons.radio_button_unchecked,
+                    size: 20,
+                    color: identical(_card, c) ? AppColors.primary : AppColors.mutedForeground,
+                  ),
+                  title: Text(c.label, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                  subtitle: Text(
+                    c.alreadyHere ? 'De ${c.businessName} · este negocio ya la tiene' : 'De ${c.businessName}',
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                ),
+              const Divider(height: 18),
+              CheckboxListTile(
+                value: _makeDefault,
+                onChanged: (v) => setState(() => _makeDefault = v ?? true),
+                dense: true,
+                contentPadding: EdgeInsets.zero,
+                controlAffinity: ListTileControlAffinity.leading,
+                title: const Text('Usarla como principal (la del cobro automático)',
+                    style: TextStyle(fontSize: 12.5)),
+              ),
+              CheckboxListTile(
+                value: _authorized,
+                onChanged: (v) => setState(() => _authorized = v ?? false),
+                dense: true,
+                contentPadding: EdgeInsets.zero,
+                controlAffinity: ListTileControlAffinity.leading,
+                title: Text(
+                  'El dueño autorizó cobrar esta tarjeta también a ${widget.businessName}.',
+                  style: const TextStyle(fontSize: 12.5),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Cancelar')),
+        FilledButton(
+          onPressed: _card == null || !_authorized
+              ? null
+              : () => Navigator.of(context).pop(OwnerCardChoice(card: _card!, makeDefault: _makeDefault)),
+          child: const Text('Usar tarjeta'),
+        ),
+      ],
+    );
   }
 }
 

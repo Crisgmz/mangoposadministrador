@@ -4,6 +4,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../core/network/supabase_client.dart';
 import '../../core/state/environment_filter.dart';
 import '../../domain/models/business_environment.dart';
+import '../../domain/models/card_charge_result.dart';
 import '../../domain/models/membership_invoice.dart';
 import '../../domain/models/invoice_payment_result.dart';
 import '../../domain/models/payment_record.dart';
@@ -82,12 +83,16 @@ class BillingRepository {
   ///
   /// Con [dryRun] no escribe nada y devuelve exactamente lo que pasaría: es la
   /// misma función del servidor, revertida. La UI lo usa como vista previa.
+  ///
+  /// [totals] (factura → total) cobra otro precio: el servidor cambia el monto
+  /// de esas facturas en la misma transacción del pago (migración 0053).
   Future<InvoicePaymentResult> markInvoicesPaid({
     required List<String> invoiceIds,
     required String method,
     String? reference,
     DateTime? paidAt,
     bool dryRun = false,
+    Map<String, double> totals = const {},
   }) async {
     final raw = await _client.rpc(
       'admin_mark_invoices_paid',
@@ -97,9 +102,82 @@ class BillingRepository {
         'p_reference': reference,
         'p_paid_at': paidAt?.toUtc().toIso8601String(),
         'p_dry_run': dryRun,
+        // Sin precios cambiados no se manda: sirve también sin la 0053.
+        if (totals.isNotEmpty) 'p_totals': totals,
       },
     );
     return InvoicePaymentResult.fromJson(Map<String, dynamic>.from(raw as Map));
+  }
+
+  /// Edita una factura pendiente o vencida (migración 0053). Solo se cambia lo
+  /// que no es null; [notes] vacío borra las notas.
+  Future<void> updateInvoice(
+    String invoiceId, {
+    double? total,
+    DateTime? dueDate,
+    String? notes,
+  }) async {
+    await _client.rpc(
+      'admin_update_invoice',
+      params: {
+        'p_invoice_id': invoiceId,
+        'p_total': total,
+        'p_due_date': dueDate == null
+            ? null
+            : '${dueDate.year.toString().padLeft(4, '0')}-'
+                '${dueDate.month.toString().padLeft(2, '0')}-'
+                '${dueDate.day.toString().padLeft(2, '0')}',
+        'p_notes': notes,
+      },
+    );
+  }
+
+  /// Cobra a la tarjeta principal del negocio, en UN cargo, las facturas
+  /// elegidas (migración 0054). [requestKey] identifica el pedido: repetirlo
+  /// (reintento de red) no cobra dos veces.
+  Future<CardChargeResult> chargeInvoicesToCard({
+    required List<String> invoiceIds,
+    required String requestKey,
+    Map<String, double> totals = const {},
+  }) {
+    return _cardCharge({
+      'action': 'charge',
+      'invoice_ids': invoiceIds,
+      'request_key': requestKey,
+      if (totals.isNotEmpty) 'totals': totals,
+    });
+  }
+
+  /// Consulta a Azul un cobro que quedó sin confirmar.
+  Future<CardChargeResult> verifyCardCharge(String chargeId) {
+    return _cardCharge({'action': 'verify', 'charge_id': chargeId});
+  }
+
+  Future<CardChargeResult> _cardCharge(Map<String, dynamic> body) async {
+    try {
+      final res = await _client.functions.invoke('admin-azul-charge-invoices', body: body);
+      final data = res.data;
+      if (data is! Map) throw const CardChargeException('Respuesta inesperada del servidor.');
+      return CardChargeResult.fromJson(Map<String, dynamic>.from(data));
+    } on FunctionException catch (e) {
+      final details = e.details;
+      if (details is Map && details['error'] is Map) {
+        final err = Map<String, dynamic>.from(details['error'] as Map);
+        final detail = err['detail'];
+        throw CardChargeException(
+          (err['message'] as String?) ?? 'Error ${e.status}',
+          code: err['code'] as String?,
+          chargeId: detail is Map ? detail['charge_id'] as String? : null,
+        );
+      }
+      if (e.status == 404) {
+        throw const CardChargeException(
+          'La función admin-azul-charge-invoices no está publicada.',
+          code: 'function_not_found',
+        );
+      }
+      throw CardChargeException('Error ${e.status}${e.reasonPhrase != null ? ' ${e.reasonPhrase}' : ''}');
+    }
   }
 
   Future<MembershipInvoice> voidInvoice(

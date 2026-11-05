@@ -82,6 +82,7 @@ class SkippedInvoice {
     'paid' => 'ya estaba pagada',
     'void' => 'está anulada',
     'not_found' => 'ya no existe',
+    'card_charge_pending' => 'se está cobrando a la tarjeta',
     _ => reason,
   };
 

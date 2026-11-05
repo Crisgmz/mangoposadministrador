@@ -23,6 +23,37 @@ class SubscriptionBillingRepository {
     return SubscriptionBilling.fromJson(Map<String, dynamic>.from(raw as Map));
   }
 
+  /// Tarjetas verificadas de los otros negocios del mismo dueño (0053).
+  Future<List<OwnerCard>> listOwnerCards(String businessId) async {
+    final raw = await _client.rpc(
+      'admin_list_owner_cards',
+      params: {'p_business_id': businessId},
+    );
+    return ((raw as List?) ?? const [])
+        .map((e) => OwnerCard.fromJson(Map<String, dynamic>.from(e as Map)))
+        .toList(growable: false);
+  }
+
+  /// Copia una tarjeta de otro negocio del mismo dueño a [targetBusinessId].
+  /// [clientAuthorized]: el operador confirma que el dueño autorizó cobrarla
+  /// también a este negocio (el servidor lo exige y lo audita).
+  Future<void> copyOwnerCard({
+    required String paymentMethodId,
+    required String targetBusinessId,
+    required bool makeDefault,
+    required bool clientAuthorized,
+  }) async {
+    await _client.rpc(
+      'admin_copy_payment_method',
+      params: {
+        'p_payment_method_id': paymentMethodId,
+        'p_target_business_id': targetBusinessId,
+        'p_make_default': makeDefault,
+        'p_client_authorized': clientAuthorized,
+      },
+    );
+  }
+
   /// Actualiza estado/fechas de la suscripción. Solo se envían los campos
   /// no nulos; el resto conserva su valor. `reason` es obligatoria (audit).
   ///
@@ -205,4 +236,10 @@ final subscriptionChargesProvider =
 final subscriptionBillingProvider =
     FutureProvider.family<SubscriptionBilling?, String>((ref, businessId) {
   return ref.watch(subscriptionBillingRepositoryProvider).get(businessId);
+});
+
+/// Tarjetas de otros negocios del mismo dueño que se pueden usar en este.
+final ownerCardsProvider =
+    FutureProvider.family<List<OwnerCard>, String>((ref, businessId) {
+  return ref.watch(subscriptionBillingRepositoryProvider).listOwnerCards(businessId);
 });

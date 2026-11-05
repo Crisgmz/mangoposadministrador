@@ -53,6 +53,7 @@ class MembershipInvoice {
     this.paidAt,
     this.paymentMethod,
     this.paymentReference,
+    this.notes,
     required this.environment,
     this.ecfOverageAmount = 0,
     this.ecfExtra,
@@ -75,6 +76,9 @@ class MembershipInvoice {
   final DateTime? paidAt;
   final String? paymentMethod;
   final String? paymentReference;
+
+  /// Solo viene en `get_business_invoices`; la lista general no la trae.
+  final String? notes;
   final BusinessEnvironment environment;
 
   /// Parte de [amount] que son facturas electrónicas extra (migración 0051).
@@ -104,6 +108,7 @@ class MembershipInvoice {
       paidAt: parseDate(json['paid_at']),
       paymentMethod: json['payment_method'] as String?,
       paymentReference: json['payment_reference'] as String?,
+      notes: json['notes'] as String?,
       environment: BusinessEnvironmentX.fromText(json['environment'] as String?),
       ecfOverageAmount: json['ecf_overage_amount'] == null
           ? 0

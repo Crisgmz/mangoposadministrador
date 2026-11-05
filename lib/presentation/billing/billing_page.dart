@@ -18,6 +18,7 @@ import '../dashboard/widgets/metric_card.dart';
 import '../shared/page_header.dart';
 import '../shared/pill_toggle.dart';
 import 'widgets/billing_matrix_view.dart';
+import 'widgets/edit_invoice_dialog.dart';
 import 'widgets/mark_paid_dialog.dart';
 import 'widgets/payments_view.dart';
 import 'widgets/open_invoice.dart';
@@ -769,11 +770,13 @@ class _ActionMenu extends ConsumerWidget {
         const PopupMenuItem(value: 'pdf', child: Text('Ver PDF')),
         const PopupMenuItem(value: 'share', child: Text('Compartir / WhatsApp')),
         const PopupMenuDivider(),
-        if (invoice.isPayable)
+        if (invoice.isPayable) ...[
           const PopupMenuItem(
             value: 'pay',
             child: Text('Marcar como pagada'),
           ),
+          const PopupMenuItem(value: 'edit', child: Text('Editar factura')),
+        ],
         if (invoice.status != InvoiceStatus.voided)
           const PopupMenuItem(
             value: 'void',
@@ -792,6 +795,8 @@ class _ActionMenu extends ConsumerWidget {
             await shareInvoicePdf(invoice, company: company);
           case 'pay':
             await showMarkPaidDialog(context, ref, [PayableInvoice.fromInvoice(invoice)]);
+          case 'edit':
+            await showEditInvoiceDialog(context, ref, invoice);
           case 'void':
             await _voidDialog(context, ref);
         }
