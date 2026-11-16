@@ -910,5 +910,22 @@ void main() {
     expect(company(business: 'b1').takenByOtherThan(const EcfOwner.external('b1')), isTrue);
     expect(company(external: 'x1').takenByOtherThan(const EcfOwner.external('x1')), isFalse);
     expect(company(external: 'x1').takenByOtherThan(const EcfOwner.business('b2')), isTrue);
+    // Otra sucursal (mismo RNC) la usa: se comparte.
+    expect(company(business: 'b1').takenByOtherThan(const EcfOwner.business('b2')), isFalse);
+  });
+
+  test('EcfCompany: manda lo que diga el servidor (can_link) y lista las sucursales', () {
+    final shared = EcfCompany.fromJson({
+      'id': '01M1',
+      'assigned_to_business_id': 'b1',
+      'shared_with': [
+        {'business_id': 'b1', 'name': 'PIZZERIA — Centro'},
+      ],
+      'can_link': true,
+    });
+    expect(shared.takenByOtherThan(const EcfOwner.business('b2')), isFalse);
+    expect(shared.sharedWith, ['PIZZERIA — Centro']);
+    final blocked = EcfCompany.fromJson({'id': '01M1', 'can_link': false});
+    expect(blocked.takenByOtherThan(const EcfOwner.business('b2')), isTrue);
   });
 }

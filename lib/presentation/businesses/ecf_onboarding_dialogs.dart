@@ -538,14 +538,23 @@ class _EcfFindCompanyDialogState extends State<EcfFindCompanyDialog> {
                                 '${c.certificateEndDate != null ? ' · vence ${df.format(c.certificateEndDate!)}' : ''}'
                             : 'Sin certificado',
                       ),
+                      if (c.sharedWith.isNotEmpty && !c.takenByOtherThan(widget.owner)) ...[
+                        const SizedBox(height: 8),
+                        EcfNote(
+                          color: AppColors.mutedForeground,
+                          text: 'También la usa ${c.sharedWith.join(', ')} (mismo RNC). '
+                              'Las sucursales comparten la empresa; cada una necesita '
+                              'su propio rango de e-NCF.',
+                        ),
+                      ],
                       const SizedBox(height: 6),
                       Align(
                         alignment: Alignment.centerRight,
                         child: c.takenByOtherThan(widget.owner)
                             ? Text(
-                                c.assignedToBusinessId != null
-                                    ? 'Ya la usa un negocio de MangoPOS'
-                                    : 'Ya la usa una solicitud de otra app',
+                                c.assignedToExternalRequestId != null
+                                    ? 'Ya la usa una solicitud de otra app'
+                                    : 'Ya la usa un negocio de MangoPOS',
                                 style: TextStyle(fontSize: 12, color: AppColors.destructive),
                               )
                             : FilledButton(

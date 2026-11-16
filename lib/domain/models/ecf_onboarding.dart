@@ -422,6 +422,8 @@ class EcfCompany {
     this.webhooksOk,
     this.assignedToBusinessId,
     this.assignedToExternalRequestId,
+    this.sharedWith = const [],
+    this.canLink,
     this.receptionUrl,
     this.approvalUrl,
     this.authenticationUrl,
@@ -451,12 +453,22 @@ class EcfCompany {
   /// En la búsqueda: solicitud de otra app que ya usa esta empresa.
   final String? assignedToExternalRequestId;
 
-  /// La usa alguien que no es [owner]: vincularla firmaría con su certificado.
+  /// En la búsqueda: sucursales de MangoPOS (mismo RNC) que ya la usan.
+  final List<String> sharedWith;
+
+  /// En la búsqueda: el servidor dice si [owner] la puede vincular.
+  final bool? canLink;
+
+  /// No se puede vincular: la usa la solicitud de otra app, o el dueño es una
+  /// solicitud de otra app y la usa alguien más. Las sucursales de MangoPOS con
+  /// el mismo RNC la comparten (un RNC = una empresa en Alanube; cada una
+  /// numera con su propio rango). Manda lo que diga el servidor.
   bool takenByOtherThan(EcfOwner owner) {
+    if (canLink != null) return !canLink!;
     final business = assignedToBusinessId;
     final external = assignedToExternalRequestId;
-    if (business != null) return owner != EcfOwner.business(business);
-    if (external != null) return owner != EcfOwner.external(external);
+    if (external != null && owner != EcfOwner.external(external)) return true;
+    if (business != null && owner.isExternal) return true;
     return false;
   }
 
@@ -487,6 +499,12 @@ class EcfCompany {
       webhooksOk: json['webhooks_ok'] as bool?,
       assignedToBusinessId: json['assigned_to_business_id'] as String?,
       assignedToExternalRequestId: json['assigned_to_external_request_id'] as String?,
+      sharedWith: ((json['shared_with'] as List?) ?? const [])
+          .whereType<Map>()
+          .map((e) => (e['name'] as String?) ?? (e['business_id'] as String?) ?? '')
+          .where((n) => n.isNotEmpty)
+          .toList(growable: false),
+      canLink: json['can_link'] as bool?,
       receptionUrl: urls?['reception'] as String?,
       approvalUrl: urls?['approval'] as String?,
       authenticationUrl: urls?['authentication'] as String?,
